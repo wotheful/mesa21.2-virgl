@@ -46,8 +46,8 @@ jobs:
             -Dvc4=disabled \
             -Detnaviv=disabled \
            -Dfreedreno-kgsl=false
-          meson compile -C "build_andorid" -j 4
-          meson install -C "build_andorid"
+          meson compile -C "build-andorid" -j 4
+          meson install -C "build-andorid"
 
           cd ..
           envsubst < android-cross >build-crossfile
@@ -71,8 +71,8 @@ jobs:
             -Dvulkan-drivers= \
             -Dgallium-drivers=virgl,llvmpipe \
             -Dshared-glapi=false
-          meson compile -C "build_andorid" -j 4
-          meson install -C "build_andorid"
+          meson compile -C "build-andorid" -j 4
+          meson install -C "build-andorid"
           $ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip /tmp/build/lib/libOSMesa.so
       - name: Upload libraries
         uses: actions/upload-artifact@main
