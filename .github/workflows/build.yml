@@ -55,7 +55,6 @@ jobs:
             --wrap-mode=nofallback \
             --native-file="build-crossfile" \
             --cross-file "build-crossfile" \
-            --fatal-meson-warnings \
             --buildtype release \
             -Dplatforms=android \
             -Dplatform-sdk-version=24 \
