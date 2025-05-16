@@ -67,8 +67,7 @@ jobs:
             -Dgbm=disabled \
             -Dopengl=true \
             -Dvulkan-drivers= \
-            -Dgallium-drivers=virgl,llvmpipe \
-            -Dshared-glapi=false
+            -Dgallium-drivers=virgl,llvmpipe
           meson compile -C "build-android" -j 4
           meson install -C "build-android"
           $ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip /tmp/build/lib/libOSMesa.so
