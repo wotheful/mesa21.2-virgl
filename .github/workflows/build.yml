@@ -66,7 +66,6 @@ jobs:
             -Degl=enabled \
             -Dgbm=disabled \
             -Dopengl=true \
-            -Dosmesa=true \
             -Dvulkan-drivers= \
             -Dgallium-drivers=virgl,llvmpipe \
             -Dshared-glapi=false
