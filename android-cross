@@ -17,10 +17,9 @@ cpp_host = '$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/a
 
 [built-in options]
 c_args = ['-DANDROID', '-Ofast', '-DVK_USE_PLATFORM_ANDROID_KHR', '-fPIC', '-DPIC', '-fwhole-program-vtables', '-mllvm', '-polly', '-Wno-incompatible-function-pointer-types', '-Wno-error=implicit-function-declaration', '-Wno-int-conversion', '-flto=thin', '-DLLVM_AVAILABLE', '-fdata-sections', '-ffunction-sections', '-fmerge-all-constants', '-fno-emulated-tls', '-march=armv8-a+simd+crc+crypto+fp16', '-DHAVE_STRUCT_TIMESPEC', '-I/tmp/build/include']
-c_link_args = ['-ldl', '-llog', '-lEGL', '-lGLESv3', '-flto=thin', '-Wl,-plugin-opt=-emulated-tls=0', '-fuse-ld=lld', '-L/tmp/build/lib', '-Wl,-rpath=/tmp/build/lib']
+c_link_args = ['-ldl', '-flto=thin', '-Wl,-plugin-opt=-emulated-tls=0', '-fuse-ld=lld', '-L/tmp/build/lib', '-Wl,-rpath=/tmp/build/lib']
 cpp_args = ['-DANDROID', '-Ofast', '-DVK_USE_PLATFORM_ANDROID_KHR', '-fPIC', '-DPIC', '-fwhole-program-vtables', '-mllvm', '-polly', '-Wno-incompatible-function-pointer-types', '-Wno-error=implicit-function-declaration', '-Wno-int-conversion', '-flto=thin', '-DLLVM_AVAILABLE', '-fdata-sections', '-ffunction-sections', '-fmerge-all-constants', '-fno-emulated-tls', '-march=armv8-a+simd+crc+crypto+fp16', '-DHAVE_STRUCT_TIMESPEC', '-I/tmp/build/include']
-cpp_link_args = ['-ldl', '-llog', '-lEGL', '-lGLESv3', '-flto=thin', '-Wl,-plugin-opt=-emulated-tls=0', '-fuse-ld=lld', '-lc++_static', '-lc++abi', '-L/tmp/build/lib', '-Wl,-rpath=/tmp/build/lib']
-needs_exe_wrapper = true
+cpp_link_args = ['-ldl', '-flto=thin', '-Wl,-plugin-opt=-emulated-tls=0', '-fuse-ld=lld', '-lc++_static', '-lc++abi', '-L/tmp/build/lib', '-Wl,-rpath=/tmp/build/lib']
 
 [properties]
 skip_sanity_check = true
