@@ -22,7 +22,6 @@ jobs:
 
       - name: Build
         run: |
-          ln -s vulkan_android.pc vulkan.pc
           sudo apt update
           sudo apt install -y meson libxrandr-dev libxxf86vm-dev libxcb-*-dev libx11-xcb-dev libxfixes-dev libx11-dev
           cp -R /usr/include/X11 include/
@@ -46,8 +45,8 @@ jobs:
             -Dvc4=disabled \
             -Detnaviv=disabled \
            -Dfreedreno-kgsl=false
-          meson compile -C "build-andorid" -j 4
-          meson install -C "build-andorid"
+          meson compile -C "build-android" -j 4
+          meson install -C "build-android"
 
           cd ..
           envsubst < android-cross >build-crossfile
@@ -71,8 +70,8 @@ jobs:
             -Dvulkan-drivers= \
             -Dgallium-drivers=virgl,llvmpipe \
             -Dshared-glapi=false
-          meson compile -C "build-andorid" -j 4
-          meson install -C "build-andorid"
+          meson compile -C "build-android" -j 4
+          meson install -C "build-android"
           $ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip /tmp/build/lib/libOSMesa.so
       - name: Upload libraries
         uses: actions/upload-artifact@main
