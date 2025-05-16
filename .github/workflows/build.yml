@@ -1,7 +1,7 @@
 name: Build Android
 
 on:
-  [workflow_dispatch]
+  [push, workflow_dispatch]
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
@@ -57,7 +57,7 @@ jobs:
             --cross-file "build-crossfile" \
             --buildtype release \
             -Dplatforms=android \
-            -Dplatform-sdk-version=24 \
+            -Dplatform-sdk-version=26 \
             -Dandroid-stub=true \
             -Dllvm=disabled \
             -Dxlib-lease=disabled \
