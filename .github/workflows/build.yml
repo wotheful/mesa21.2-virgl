@@ -23,7 +23,7 @@ jobs:
       - name: Build
         run: |
           sudo apt update
-          sudo apt install -y meson libxrandr-dev libxxf86vm-dev libxcb-*-dev libx11-xcb-dev libxfixes-dev libx11-dev
+          sudo apt install -y meson libxrandr-dev libxxf86vm-dev libxcb-*-dev libx11-xcb-dev libxfixes-dev libx11-dev libclc-dev
           cp -R /usr/include/X11 include/
           cp -R /usr/include/xcb include/
           pip3 install mako
@@ -65,8 +65,11 @@ jobs:
             -Dgbm=disabled \
             -Dopengl=true \
             -Dvulkan-drivers= \
-            -Dopencl-spirv=disabled \
-            -Dgallium-opencl=disabled \
+            -Dmesa-clc=system \
+            -Dprecomp-compiler=system \
+            -Dtools=panfrost \
+            -Dmesa-clc=enabled \
+            -Dinstall-mesa-clc=true \
             -Dgallium-drivers=virgl,panfrost
           meson compile -C "build-android" -j 4
           meson install -C "build-android"
