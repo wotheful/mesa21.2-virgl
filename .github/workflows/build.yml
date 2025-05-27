@@ -23,7 +23,7 @@ jobs:
       - name: Build
         run: |
           sudo apt update
-          sudo apt install -y meson libxrandr-dev libxxf86vm-dev libxcb-*-dev libx11-xcb-dev libxfixes-dev libx11-dev libclc-19-dev
+          sudo apt install -y meson libxrandr-dev libxxf86vm-dev libxcb-*-dev libx11-xcb-dev libxfixes-dev libx11-dev libclc-19-dev libllvm-19-dev
           cp -R /usr/include/X11 include/
           cp -R /usr/include/xcb include/
           pip3 install mako
@@ -59,7 +59,7 @@ jobs:
             -Dplatforms=android \
             -Dplatform-sdk-version=26 \
             -Dandroid-stub=true \
-            -Dllvm=disabled \
+            -Dllvm=enabled \
             -Dxlib-lease=disabled \
             -Degl=enabled \
             -Dgbm=disabled \
