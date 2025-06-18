@@ -124,6 +124,10 @@ if gbm_backends_path == ''
   gbm_backends_path = join_paths(get_option('prefix'), get_option('libdir'), 'gbm')
 endif
 
+
+# TODO: Remove this and the old static glapi along with it.
+with_shared_glapi = true
+
 with_opengl = get_option('opengl')
 with_gles1 = get_option('gles1').allowed()
 with_gles2 = get_option('gles2').allowed()
@@ -133,6 +137,8 @@ pre_args += '-DHAVE_OPENGL_ES_1=@0@'.format(with_gles1.to_int())
 pre_args += '-DHAVE_OPENGL_ES_2=@0@'.format(with_gles2.to_int())
 
 with_any_opengl = with_opengl or with_gles1 or with_gles2
+# Only build shared_glapi if at least one OpenGL API is enabled
+with_shared_glapi = with_shared_glapi and with_any_opengl
 
 system_has_kms_drm = ['openbsd', 'netbsd', 'freebsd', 'gnu/kfreebsd', 'dragonfly', 'linux', 'sunos', 'android', 'managarm'].contains(host_machine.system())
 
@@ -2299,6 +2305,7 @@ summary(
     'OpenGL': with_opengl,
     'ES1': with_gles1,
     'ES2': with_gles2,
+    'Shared glapi': with_shared_glapi,
     'GLVND': with_glvnd,
   },
   section: 'OpenGL', bool_yn: true
