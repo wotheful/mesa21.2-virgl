@@ -1,7 +1,7 @@
 name: Build Android
 
 on:
-  [push, workflow_dispatch]
+  [workflow_dispatch]
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
@@ -50,10 +50,6 @@ jobs:
           meson install -C "build-android"
 
           cd ..
-          cp -R mesa_deps/spirv-tools/include /tmp/build/lib
-          cp -R mesa_deps/spirv-tools/pkgconfig /tmp/build/lib
-          chmod +x ./.gitlab-ci/create-llvm-meson-wrap-file.sh
-          ./.gitlab-ci/create-llvm-meson-wrap-file.sh
           envsubst < android-cross >build-crossfile
           meson setup "build-android" \
             --prefix=/tmp/build \
@@ -65,19 +61,17 @@ jobs:
             -Dplatforms=android \
             -Dplatform-sdk-version=26 \
             -Dandroid-stub=true \
-            -Dllvm=enabled \
-            -Dshared-llvm=enabled \
+            -Dllvm=disabled \
+            -Dshared-llvm=disabled \
             -Dxlib-lease=disabled \
             -Degl=enabled \
             -Dgbm=disabled \
             -Dopengl=true \
             -Dvulkan-drivers= \
-            -Dmesa-clc=system \
             -Dprecomp-compiler=system \
-            -Dtools=panfrost \
-            -Dmesa-clc=enabled \
-            -Dinstall-mesa-clc=true \
-            -Dgallium-drivers=virgl,panfrost
+            -Dmesa-clc=disabled \
+            -Dinstall-mesa-clc=false \
+            -Dgallium-drivers=virgl
           meson compile -C "build-android" -j 4
           meson install -C "build-android"
       - name: Upload libraries
