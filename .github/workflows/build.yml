@@ -23,7 +23,7 @@ jobs:
       - name: Build
         run: |
           sudo apt update
-          sudo apt install -y meson libxrandr-dev libxxf86vm-dev libxcb-*-dev libx11-xcb-dev libxfixes-dev libx11-dev libclc-19-dev llvm-19-dev libllvmspirvlib-19-dev
+          sudo apt install -y meson libxrandr-dev libxxf86vm-dev libxcb-*-dev libx11-xcb-dev libxfixes-dev libx11-dev
           cp -R /usr/include/X11 include/
           cp -R /usr/include/xcb include/
           
@@ -52,10 +52,13 @@ jobs:
           cd ..
           cp -R mesa_deps/spirv-tools/include /tmp/build/lib
           cp -R mesa_deps/spirv-tools/pkgconfig /tmp/build/lib
+          chmod +x ./.gitlab-ci/create-llvm-meson-wrap-file.sh
+          ./.gitlab-ci/create-llvm-meson-wrap-file.sh
           envsubst < android-cross >build-crossfile
           meson setup "build-android" \
             --prefix=/tmp/build \
             --wrap-mode=nofallback \
+            -Dforce_fallback_for=llvm \
             --native-file="build-crossfile" \
             --cross-file "build-crossfile" \
             --buildtype release \
