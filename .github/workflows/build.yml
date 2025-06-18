@@ -55,6 +55,7 @@ jobs:
             --prefix=/tmp/build \
             --wrap-mode=nofallback \
             -Dforce_fallback_for=llvm \
+            -Dosmesa=true \
             --native-file="build-crossfile" \
             --cross-file "build-crossfile" \
             --buildtype release \
