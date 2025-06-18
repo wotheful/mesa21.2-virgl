@@ -70,8 +70,6 @@ jobs:
             -Dopengl=true \
             -Dvulkan-drivers= \
             -Dprecomp-compiler=system \
-            -Dmesa-clc=disabled \
-            -Dinstall-mesa-clc=false \
             -Dgallium-drivers=virgl
           meson compile -C "build-android" -j 4
           meson install -C "build-android"
