@@ -65,7 +65,7 @@ libgallium_dri = shared_library(
     driver_asahi, driver_crocus
   ],
   install : false,
-  libname_suffix,
+  name_suffix : libname_suffix,
 )
 
 shared_glapi_lib = libgallium_dri
