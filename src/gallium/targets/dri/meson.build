@@ -40,7 +40,7 @@ else
   libgallium_name = 'gallium-@0@'.format(meson.project_version())
 endif
 
-libgallium_dri = shared_library(
+libgallium_dri = static_library(
   libgallium_name,
   files('dri_target.c'),
   include_directories : [
