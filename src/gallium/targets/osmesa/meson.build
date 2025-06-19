@@ -32,10 +32,10 @@ libosmesa = shared_library(
   link_depends : osmesa_link_deps,
   link_whole : [libosmesa_st, libglapi],
   link_with : [
-    libmesa, libgallium, libws_null, osmesa_link_with, libgallium_dri,
+    osmesa_link_with, libgallium_dri,
   ],
   dependencies : [
-    dep_ws2_32, dep_thread, dep_clock, dep_unwind, driver_swrast, dep_libdrm, idep_mesautil, driver_zink, driver_freedreno
+    dep_ws2_32, dep_thread, dep_clock, dep_unwind, driver_swrast, dep_libdrm, idep_mesautil, driver_zink, driver_freedreno, driver_virgl,
   ],
   name_prefix : host_machine.system() == 'windows' ? '' : [],  # otherwise mingw will create libosmesa.dll
   soversion : '',
