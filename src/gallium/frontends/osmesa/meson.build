@@ -3,7 +3,7 @@
 
 osmesa_st_c_args = []
 if with_platform_windows
-    osmesa_st_c_args += ['-D_GLAPI_NO_EXPORTS']
+  osmesa_st_c_args += ['-D_GLAPI_NO_EXPORTS']
 endif
 
 libosmesa_st = static_library(
