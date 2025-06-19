@@ -64,7 +64,7 @@ libgallium_dri = static_library(
     driver_panfrost, driver_iris, driver_lima, driver_zink, driver_d3d12,
     driver_asahi, driver_crocus
   ],
-  install : true,
+  install : false,
   name_suffix : libname_suffix,
 )
 
