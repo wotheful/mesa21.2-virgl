@@ -69,7 +69,6 @@ jobs:
             -Dgbm=disabled \
             -Dopengl=true \
             -Dvulkan-drivers= \
-            -Dprecomp-compiler=system \
             -Dgallium-drivers=virgl
           meson compile -C "build-android" -j 4
           meson install -C "build-android"
