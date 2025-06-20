@@ -32,7 +32,7 @@ libosmesa = shared_library(
   link_depends : osmesa_link_deps,
   link_whole : [libosmesa_st, libglapi],
   link_with : [
-    osmesa_link_with, libgallium_dri,
+    osmesa_link_with, shared_glapi_lib,
   ],
   dependencies : [
     dep_ws2_32, dep_thread, dep_clock, dep_unwind, driver_swrast, dep_libdrm, idep_mesautil, driver_zink, driver_freedreno, driver_virgl,
