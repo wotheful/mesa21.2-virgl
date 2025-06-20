@@ -64,7 +64,7 @@ libgallium_dri = shared_library(
     driver_panfrost, driver_iris, driver_lima, driver_zink, driver_d3d12,
     driver_asahi, driver_crocus
   ],
-  install : false,
+  install : true,
   name_suffix : libname_suffix,
 )
 
