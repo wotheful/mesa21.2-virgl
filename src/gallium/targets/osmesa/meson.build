@@ -32,10 +32,12 @@ libosmesa = shared_library(
   link_depends : osmesa_link_deps,
   link_whole : [libosmesa_st,],
   link_with : [
-    libmesa, libws_null, libgallium, osmesa_link_with, libglapi, libpipe_loader_static, gallium_dri_link_with,
+    libmesa, libgalliumvl,
+    libgallium, libglapi, libpipe_loader_static, libws_null, libwsw, libswdri,
+    libswkmsdri, gallium_dri_link_with, osmesa_link_with,
   ],
   dependencies : [
-    dep_ws2_32, dep_thread, dep_clock, dep_unwind, driver_swrast, dep_libdrm, idep_mesautil, driver_swrast, driver_r300, driver_r600, driver_radeonsi, driver_nouveau,
+    dep_ws2_32, dep_thread, dep_clock, dep_unwind, driver_swrast, dep_libdrm, dep_llvm, dep_thread, idep_mesautil, driver_swrast, driver_r300, driver_r600, driver_radeonsi, driver_nouveau,
     driver_kmsro, driver_v3d, driver_vc4, driver_freedreno, driver_etnaviv,
     driver_tegra, driver_i915, driver_svga, driver_virgl,
     driver_panfrost, driver_iris, driver_lima, driver_zink, driver_d3d12,
