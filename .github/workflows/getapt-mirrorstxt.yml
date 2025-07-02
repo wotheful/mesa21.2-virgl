@@ -27,8 +27,8 @@ jobs:
              sudo cp /etc/apt/apt-mirrors.txt ./tmp
 
         
-      - name: Upload /etc/apt/apt-mirrors.txt
+      - name: Upload apt-mirrors.txt
         uses: actions/upload-artifact@main
         with:
-          name: /etc/apt/apt-mirrors.txt
-          path: /etc/apt/apt-mirrors.txt
+          name: apt-mirrors.txt
+          path: tmp/apt-mirrors.txt
