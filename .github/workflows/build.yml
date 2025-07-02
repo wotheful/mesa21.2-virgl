@@ -61,7 +61,7 @@ jobs:
             --cross-file "build-crossfile" \
             --buildtype release \
             -Dplatforms=android \
-            -Dplatform-sdk-version=29 \
+            -Dplatform-sdk-version=26 \
             -Dandroid-stub=true \
             -Dllvm=disabled \
             -Dshared-llvm=disabled \
@@ -69,7 +69,7 @@ jobs:
             -Degl=enabled \
             -Dgbm=disabled \
             -Dopengl=true \
-            -Dgles2=true
+            -Dgles2=true \
             -Dvulkan-drivers= \
             -Dgallium-drivers=virgl,swrast
           meson compile -C "build-android" -j 4
