@@ -72,7 +72,7 @@ jobs:
             -Dopengl=true \
             -Dgles2=enabled \
             -Dvulkan-drivers= \
-            -Dtools=drm-shim \
+            -Dtools= \
             -Dgallium-drivers=virgl
           meson compile -C "build-android" -j 4
           meson install -C "build-android"
