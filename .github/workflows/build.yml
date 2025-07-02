@@ -56,12 +56,12 @@ jobs:
             --prefix=/tmp/build \
             --wrap-mode=nofallback \
             -Dforce_fallback_for=llvm \
-            -Dosmesa=true \
+            -Dosmesa=false \
             --native-file="build-crossfile" \
             --cross-file "build-crossfile" \
             --buildtype release \
             -Dplatforms=android \
-            -Dplatform-sdk-version=26 \
+            -Dplatform-sdk-version=29 \
             -Dandroid-stub=true \
             -Dllvm=disabled \
             -Dshared-llvm=disabled \
@@ -69,8 +69,9 @@ jobs:
             -Degl=enabled \
             -Dgbm=disabled \
             -Dopengl=true \
+            -Dgles2=true
             -Dvulkan-drivers= \
-            -Dgallium-drivers=virgl
+            -Dgallium-drivers=virgl,swrast
           meson compile -C "build-android" -j 4
           meson install -C "build-android"
       - name: Upload libraries
