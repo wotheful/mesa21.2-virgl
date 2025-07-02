@@ -20,6 +20,13 @@ jobs:
 
       - name: apt update
         run: sudo apt update
+
+      - name: cp apt-mirrors.txt
+        run: |
+             mkdir -p ./tmp
+             sudo cp /etc/apt/apt-mirrors.txt ./tmp
+
+        
       - name: Upload /etc/apt/apt-mirrors.txt
         uses: actions/upload-artifact@main
         with:
