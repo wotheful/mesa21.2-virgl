@@ -1,4 +1,4 @@
-name: Get source.list
+name: Get apt-mirrors.txt
 
 on:
   [push, workflow_dispatch]
@@ -20,8 +20,8 @@ jobs:
 
       - name: apt update
         run: sudo apt update
-      - name: Upload source.list
+      - name: Upload /etc/apt/apt-mirrors.txt
         uses: actions/upload-artifact@main
         with:
-          name: source.list
-          path: /etc/apt/source.list
+          name: /etc/apt/apt-mirrors.txt
+          path: /etc/apt/apt-mirrors.txt
