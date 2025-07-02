@@ -56,7 +56,7 @@ jobs:
             --prefix=/tmp/build \
             --wrap-mode=nofallback \
             -Dforce_fallback_for=llvm \
-            -Dosmesa=false \
+            -Dosmesa=true \
             --native-file="build-crossfile" \
             --cross-file "build-crossfile" \
             --buildtype release \
@@ -67,10 +67,12 @@ jobs:
             -Dshared-llvm=disabled \
             -Dxlib-lease=disabled \
             -Degl=enabled \
+            -Degl-native-platform=android \
             -Dgbm=disabled \
             -Dopengl=true \
             -Dgles2=enabled \
             -Dvulkan-drivers= \
+            -Dtools=drm-shim \
             -Dgallium-drivers=virgl
           meson compile -C "build-android" -j 4
           meson install -C "build-android"
