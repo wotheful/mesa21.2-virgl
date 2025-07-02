@@ -1178,7 +1178,7 @@ dri2_initialize_android(_EGLDisplay *disp)
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    const char *err;
 
-   dri2_dpy->gralloc = u_gralloc_create(U_GRALLOC_TYPE_AUTO);
+   dri2_dpy->gralloc = u_gralloc_create(U_GRALLOC_TYPE_LIBDRM);
    if (dri2_dpy->gralloc == NULL) {
       err = "DRI2: failed to get gralloc";
       goto cleanup;
