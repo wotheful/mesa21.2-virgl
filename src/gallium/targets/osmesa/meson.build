@@ -34,7 +34,7 @@ libosmesa = shared_library(
   link_with : [
     libmesa, libgalliumvl,
     libgallium, libglapi, libpipe_loader_static, libws_null, libwsw, libswdri,
-    libswkmsdri, gallium_dri_link_with, osmesa_link_with,
+    libswkmsdri, osmesa_link_with,
   ],
   dependencies : [
     dep_ws2_32, dep_thread, dep_clock, dep_unwind, driver_swrast, dep_libdrm, dep_llvm, dep_thread, idep_mesautil, driver_swrast, driver_r300, driver_r600, driver_radeonsi, driver_nouveau,
