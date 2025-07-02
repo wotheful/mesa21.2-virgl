@@ -6,7 +6,7 @@ project(
   ['c', 'cpp'],
   version : files('VERSION'),
   license : 'MIT',
-  meson_version : '>= 1.3.0',
+  meson_version : '>= 1.4.0',
   default_options : [
     'buildtype=debugoptimized',
     'b_ndebug=if-release',
@@ -39,6 +39,9 @@ if get_option('layout') != 'mirror'
   error('`mirror` is the only build directory layout supported')
 endif
 
+with_llvm = get_option('llvm')
+amd_with_llvm = get_option('amd-use-llvm')
+
 with_mesa_debug = get_option('buildtype') == 'debug'
 
 # This means the final value of b_ndebug==true
@@ -57,6 +60,7 @@ cl_args = [
 
   # Declare supported clang builtins since we don't autodetect for OpenCL
   '-DHAVE___BUILTIN_FFS',
+  '-DHAVE___BUILTIN_CLZ',
 ]
 
 if with_mesa_ndebug
@@ -95,18 +99,19 @@ with_vulkan_vram_report_limit_layer = get_option('vulkan-layers').contains('vram
 with_tools = get_option('tools')
 if with_tools.contains('all')
   with_tools = [
-    'drm-shim',
+    'asahi',
     'dlclose-skip',
+    'drm-shim',
     'etnaviv',
     'freedreno',
     'glsl',
+    'imagination',
     'intel',
     'intel-ui',
     'lima',
     'nir',
     'nouveau',
-    'asahi',
-    'imagination',
+    'panfrost',
   ]
 endif
 
@@ -146,6 +151,7 @@ gallium_drivers = get_option('gallium-drivers')
 if gallium_drivers.contains('auto')
   if system_has_kms_drm
     # TODO: Sparc
+    # TODO: handle llvm being disabled or auto when setting default_drivers
     if ['x86', 'x86_64'].contains(host_machine.cpu_family())
       gallium_drivers = [
         'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'svga', 'llvmpipe', 'softpipe',
@@ -211,6 +217,10 @@ with_gallium_asahi = gallium_drivers.contains('asahi')
 foreach gallium_driver : gallium_drivers
   pre_args += '-DHAVE_@0@'.format(gallium_driver.to_upper())
 endforeach
+with_llvm = with_llvm \
+  .enable_if(with_gallium_radeonsi and amd_with_llvm, error_message : 'RadeonSI Gallium driver configured to require LLVM') \
+  .enable_if(with_gallium_r600 and amd_with_llvm, error_message : 'R600 Gallium driver configured to require LLVM') \
+  .enable_if(with_gallium_llvmpipe, error_message : 'LLVMPipe Gallium driver requires LLVM')
 
 # compatibility for "swrast" as an internal-ish driver name
 with_gallium_swrast = with_gallium_softpipe or with_gallium_llvmpipe
@@ -231,6 +241,7 @@ with_gallium_kmsro = system_has_kms_drm and [
 
 _vulkan_drivers = get_option('vulkan-drivers')
 if _vulkan_drivers.contains('auto')
+  # TODO: handle swrat driver if llvm is auto/disabled
   if system_has_kms_drm
     if host_machine.cpu_family().startswith('x86')
       _vulkan_drivers = ['amd', 'intel', 'intel_hasvk', 'nouveau', 'swrast']
@@ -275,9 +286,9 @@ with_asahi_vk = _vulkan_drivers.contains('asahi')
 with_gfxstream_vk = _vulkan_drivers.contains('gfxstream')
 with_any_vk = _vulkan_drivers.length() != 0
 
-if with_any_vk and host_machine.system() == 'windows' and meson.version().version_compare('< 1.3')
-  error('Vulkan drivers on Windows require meson 1.3 or newer')
-endif
+with_llvm = with_llvm \
+  .enable_if(with_swrast_vk, error_message : 'Lavapipe Vulkan driver requires LLVM') \
+  .enable_if(with_amd_vk and with_aco_tests, error_message : 'RadV ACO tests require LLVM')
 
 with_any_llvmpipe = with_gallium_llvmpipe or with_swrast_vk
 with_gallium_or_lvp = with_gallium or with_swrast_vk
@@ -297,6 +308,15 @@ if freedreno_kmds.length() != 0 and freedreno_kmds != [ 'msm' ] and with_freedre
   endif
 endif
 
+with_vdrm = [
+  with_gallium_virgl,
+  with_virtio_vk,
+  with_amdgpu_virtio,
+  freedreno_kmds.contains('virtio'),
+  with_gallium_asahi,
+  with_asahi_vk,
+].contains(true)
+
 with_dri = false
 if with_gallium and system_has_kms_drm
   _glx = get_option('glx')
@@ -314,29 +334,12 @@ with_any_broadcom = [
 
 with_intel_vk_rt = get_option('intel-rt') \
    .disable_auto_if(not with_intel_vk) \
-   .disable_if(get_option('intel-bvh-grl') and \
-               host_machine.cpu_family() != 'x86_64', \
-               error_message : 'Intel Ray Tracing is only supported on x86_64') \
   .allowed()
-
-with_intel_bvh_grl = get_option('intel-bvh-grl')
-
-if get_option('intel-clc') != 'system' and \
-   get_option('precomp-compiler') != 'system' and \
-   with_intel_bvh_grl
-  # Require intel-clc with Anv & Iris (for internal shaders)
-  with_intel_clc = get_option('intel-clc') == 'enabled' or \
-                   get_option('precomp-compiler') == 'enabled' or \
-                   with_intel_bvh_grl
-else
-  with_intel_clc = false
-endif
 
 with_any_intel = [
   with_gallium_crocus,
   with_gallium_i915,
   with_gallium_iris,
-  with_intel_clc,
   with_intel_hasvk,
   with_intel_tools,
   with_intel_vk,
@@ -607,6 +610,14 @@ if with_gallium_d3d12 or with_microsoft_clc or with_microsoft_vk or with_gfxstre
   endif
 endif
 
+if dep_dxheaders.found()
+  if (dep_dxheaders.version().version_compare('>= 1.700.0'))
+    pre_args += '-DUSE_D3D12_PREVIEW_HEADERS=1'
+  else
+    pre_args += '-DUSE_D3D12_PREVIEW_HEADERS=0'
+  endif
+endif
+
 _with_gallium_d3d12_video = get_option('gallium-d3d12-video')
 with_gallium_d3d12_video = false
 if with_gallium_d3d12 and not _with_gallium_d3d12_video.disabled()
@@ -693,38 +704,28 @@ if va_drivers_path == ''
   va_drivers_path = join_paths(get_option('libdir'), 'dri')
 endif
 
-with_gallium_xa = get_option('gallium-xa') \
-  .require(system_has_kms_drm, error_message : 'XA state tracker can only be built on unix-like OSes.') \
-  .require(with_gallium_nouveau or with_gallium_freedreno or with_gallium_i915 or with_gallium_svga,
-           error_message : 'XA state tracker requires at least one of the following gallium drivers: nouveau, freedreno, i915, svga.') \
-  .allowed()
+_mediafoundation_drivers = [
+  with_gallium_d3d12_video,
+]
+
+with_gallium_mediafoundation = get_option('gallium-mediafoundation') \
+  .require(host_machine.system() == 'windows', error_message : 'mediafoundation only supported on Windows') \
+  .require(_mediafoundation_drivers.contains(true),
+           error_message : 'Media foundation state tracker requires at least one of the following gallium drivers: d3d12 (with option gallium-d3d12-video).') \
+  .enabled()
+
+with_gallium_mediafoundation_test = get_option('gallium-mediafoundation-test')
+if with_gallium_mediafoundation_test
+  if not with_gallium_mediafoundation
+    error('The mediafoundation test requires mediafoundation.')
+  endif
+endif
 
 d3d_drivers_path = get_option('d3d-drivers-path')
 if d3d_drivers_path == ''
   d3d_drivers_path = join_paths(get_option('prefix'), get_option('libdir'), 'd3d')
 endif
 
-with_gallium_st_nine =  get_option('gallium-nine')
-if with_gallium_st_nine
-  warning('The nine state tracker will be removed in Mesa 25.2')
-  if not with_gallium_swrast
-    error('The nine state tracker requires gallium softpipe/llvmpipe.')
-  elif not [
-             with_gallium_crocus,
-             with_gallium_freedreno,
-             with_gallium_i915,
-             with_gallium_iris,
-             with_gallium_nouveau,
-             with_gallium_panfrost,
-             with_gallium_r300,
-             with_gallium_r600,
-             with_gallium_radeonsi,
-             with_gallium_svga,
-             with_gallium_zink,
-           ].contains(true)
-    error('The nine state tracker requires at least one non-swrast gallium driver.')
-  endif
-endif
 with_gallium_st_d3d10umd =  get_option('gallium-d3d10umd')
 if with_gallium_st_d3d10umd
   if not with_gallium_swrast
@@ -762,17 +763,11 @@ if with_gallium_rusticl
   endif
 endif
 
-if with_gallium_rusticl or with_nouveau_vk or with_tools.contains('etnaviv')
-  if with_gallium_rusticl
-    # uses rust.bindgen.output_inline_wrapper needing 1.4.0
-    if meson.version().version_compare('< 1.4.0')
-      error('Rusticl requires meson 1.4.0 or newer')
-    endif
-  else
-    # see https://github.com/mesonbuild/meson/issues/12758 (backported to 1.3.2)
-    if meson.version().version_compare('< 1.3.2')
-      error('Mesa Rust support requires meson 1.3.2 or newer')
-    endif
+with_virtgpu_kumquat = get_option('virtgpu_kumquat') and with_gfxstream_vk
+if with_gallium_rusticl or with_nouveau_vk or with_tools.contains('etnaviv') or with_virtgpu_kumquat
+  # rust.bindgen() does not pass `--rust-target` to bindgen until 1.7.0.
+  if meson.version().version_compare('< 1.7.0')
+    error('Mesa Rust support requires Meson 1.7.0 or newer')
   endif
 
   add_languages('rust', required: true)
@@ -783,18 +778,25 @@ if with_gallium_rusticl or with_nouveau_vk or with_tools.contains('etnaviv')
     error('Mesa requires Rust 1.78.0 or newer')
   endif
 
+  # bindgen 0.71 is the first version that knows about `editions`
   bindgen_version = find_program('bindgen').version()
-  if bindgen_version == 'unknown'
-    error('Failed to detect bindgen version. If you are using bindgen 0.69.0, ' +
-          'please either update to 0.69.1 or downgrade to 0.68.1. ' +
-          'You can install the latest version for your user with `cargo install bindgen-cli`.')
-  endif
-
-  if bindgen_version.version_compare('< 0.65')
-    error('Mesa requires bindgen 0.65 or newer. ' +
+  # unknown covers buggy 0.69.0, 0.71.0
+  if bindgen_version == 'unknown' or bindgen_version.version_compare('< 0.71.1')
+    error('Mesa requires bindgen 0.71.1 or newer. ' +
           'If your distribution does not ship a recent enough version, ' +
           'you can install the latest version for your user with `cargo install bindgen-cli`.')
   endif
+
+  bindgen_output_args = [
+    # can't do anything about it anyway
+    '--raw-line', '#![allow(clippy::all)]',
+    '--raw-line', '#![allow(improper_ctypes)]',
+    # Some bindgen versions assume `unsafe_op_in_unsafe_fn`
+    '--raw-line', '#![allow(unused_unsafe)]',
+    '--raw-line', '#![allow(non_camel_case_types)]',
+    '--raw-line', '#![allow(non_snake_case)]',
+    '--raw-line', '#![allow(non_upper_case_globals)]',
+  ]
 endif
 
 if get_option('precomp-compiler') != 'system'
@@ -820,6 +822,9 @@ else
              with_microsoft_clc or with_gallium_rusticl or \
              with_drivers_clc or with_driver_using_cl
 endif
+
+with_llvm = with_llvm \
+  .enable_if(with_clc, error_message : 'CLC requires LLVM')
 
 dep_clc = null_dep
 if with_clc
@@ -1032,6 +1037,7 @@ elif host_machine.system() == 'windows'
       '-D_ALLOW_KEYWORD_MACROS',
       '-D_HAS_EXCEPTIONS=0', # Tell C++ STL to not use exceptions
       '-DNOMINMAX',
+      '-D_UCRT_NOISY_NAN', # https://developercommunity.visualstudio.com/t/NAN-is-no-longer-compile-time-constant-i/10688907?viewtype=all
     ]
   else
     # When the target is not mingw/ucrt
@@ -1586,18 +1592,14 @@ if dep_thread.found()
 endif
 
 with_expat = get_option('expat') \
-  .disable_auto_if(with_platform_android or with_platform_windows)
+  .disable_auto_if(with_platform_android or with_platform_windows) \
+  .enable_if(with_intel_tools, error_message : 'Intel tools require expat')
 
 if host_machine.system() == 'darwin'
   dep_expat = meson.get_compiler('c').find_library('expat', required : with_expat)
 else
   dep_expat = dependency('expat', allow_fallback: true,
                          required : with_expat)
-endif
-
-# TODO: with Meson 1.1.0 this can be replaced with with_expat.enable_if(with_intel_tools)
-if with_intel_tools and not dep_expat.found()
-  error('Intel tools require expat')
 endif
 
 # We don't require expat on Android or Windows
@@ -1668,12 +1670,18 @@ if _drm_blame != ''
   message('libdrm @0@ needed because @1@ has the highest requirement'.format(_drm_ver, _drm_blame))
 endif
 
+allow_fallback_for_libdrm = get_option('allow-fallback-for').contains('libdrm')
+
 # Then get each libdrm module
 foreach d : _libdrm_checks
   if d[1]
     set_variable(
       'dep_libdrm_' + d[0],
-      dependency('libdrm_' + d[0], version : '>=' + _drm_ver)
+      dependency(
+        'libdrm_' + d[0],
+        version : '>=' + _drm_ver,
+        allow_fallback: allow_fallback_for_libdrm,
+      )
     )
   endif
 endforeach
@@ -1682,7 +1690,8 @@ with_gallium_drisw_kms = false
 if system_has_kms_drm
   dep_libdrm = dependency(
     'libdrm', version : '>=' + _drm_ver,
-    required : with_dri2 or with_dri or with_gbm
+    required : with_dri2 or with_dri or with_gbm,
+    allow_fallback: allow_fallback_for_libdrm,
   )
 else
   # We should prevent libdrm from being available when the target doesn't have it to avoid transitive
@@ -1722,7 +1731,6 @@ if draw_with_llvm
   # lto is needded with LLVM>=15, but we don't know what LLVM verrsion we are using yet
   llvm_optional_modules += ['lto']
 endif
-amd_with_llvm = get_option('amd-use-llvm')
 
 # MCJIT is deprecated in LLVM and will not accept new architecture ports,
 # so any architecture not in the exhaustive list will have to rely on LLVM
@@ -1742,36 +1750,23 @@ _shared_llvm = get_option('shared-llvm') \
   .disable_auto_if(host_machine.system() == 'windows') \
   .allowed()
 
-_llvm = get_option('llvm')
-dep_llvm = null_dep
-with_llvm = false
-if _llvm.allowed()
-  dep_llvm = dependency(
-    'llvm',
-    method : host_machine.system() == 'windows' ? 'auto' : 'config-tool',
-    version : _llvm_version,
-    modules : llvm_modules,
-    optional_modules : llvm_optional_modules,
-    required : (
-      with_amd_vk or with_gallium_radeonsi or with_clc
-      or _llvm.enabled()
-    ),
-    static : not _shared_llvm,
-    fallback : ['llvm', 'dep_llvm'],
-    include_type : 'system',
-  )
-  with_llvm = dep_llvm.found()
-endif
-if with_llvm
+dep_llvm = dependency(
+  'llvm',
+  method : host_machine.system() == 'windows' ? 'auto' : 'config-tool',
+  version : _llvm_version,
+  modules : llvm_modules,
+  optional_modules : llvm_optional_modules,
+  required : with_llvm,
+  static : not _shared_llvm,
+  fallback : ['llvm', 'dep_llvm'],
+  include_type : 'system',
+)
+if dep_llvm.found()
   pre_args += '-DMESA_LLVM_VERSION_STRING="@0@"'.format(dep_llvm.version())
   pre_args += '-DLLVM_IS_SHARED=@0@'.format(_shared_llvm.to_int())
 
   if (with_swrast_vk or with_gallium_llvmpipe) and not draw_with_llvm
     error('Lavapipe and llvmpipe require LLVM draw support.')
-  endif
-
-  if with_gallium_r600 and not amd_with_llvm
-    error('R600 requires LLVM AMD support.')
   endif
 
   if host_machine.system() != 'windows'
@@ -1801,22 +1796,14 @@ if with_llvm
       language : ['c', 'cpp'],
     )
   endif
-elif with_amd_vk and with_aco_tests
-  error('ACO tests require LLVM, but LLVM is disabled.')
-elif with_swrast_vk
-  error('lavapipe requires LLVM and is enabled, but LLVM is disabled.')
-elif with_any_llvmpipe
-  error('llvmpipe requires LLVM and is enabled, but LLVM is disabled.')
-elif with_clc
-  error('The CLC compiler requires LLVM, but LLVM is disabled.')
 else
   draw_with_llvm = false
 endif
-amd_with_llvm = amd_with_llvm and with_llvm
-pre_args += '-DLLVM_AVAILABLE=@0@'.format(with_llvm.to_int())
-pre_args += '-DDRAW_LLVM_AVAILABLE=@0@'.format((with_llvm and draw_with_llvm).to_int())
+amd_with_llvm = amd_with_llvm and dep_llvm.found()
+pre_args += '-DLLVM_AVAILABLE=@0@'.format(dep_llvm.found().to_int())
+pre_args += '-DDRAW_LLVM_AVAILABLE=@0@'.format((dep_llvm.found() and draw_with_llvm).to_int())
 pre_args += '-DAMD_LLVM_AVAILABLE=@0@'.format(amd_with_llvm.to_int())
-pre_args += '-DGALLIVM_USE_ORCJIT=@0@'.format((with_llvm and llvm_with_orcjit).to_int())
+pre_args += '-DGALLIVM_USE_ORCJIT=@0@'.format((dep_llvm.found() and llvm_with_orcjit).to_int())
 
 if with_clc
   chosen_llvm_version_array = dep_llvm.version().split('.')
@@ -1924,11 +1911,8 @@ endif
 
 # ThreadSanitizer can't deal with futexes, and reports races for cases we don't care about
 # so add a define to work silence these issues.
-if get_option('b_sanitize') == 'thread'
+if get_option('b_sanitize').contains('thread')
   pre_args += '-DTHREAD_SANITIZER=1'
-  # meson versions prior to 1.4 will warn "Consider using the built-in option for sanitizers ..."
-  # later on because it only checks whether the option starts with "-fsanitize",
-  # but there is no built-in option for adding a blacklist
   tsan_blacklist = '-fsanitize-blacklist=@0@'.format(join_paths(meson.project_source_root(), 'build-support', 'tsan-blacklist.txt'))
   if cc.has_argument(tsan_blacklist)
     pre_args += tsan_blacklist
@@ -2138,7 +2122,7 @@ if with_platform_x11
   if (with_egl or
       with_dri or
       with_any_vk or
-      with_gallium_vdpau or with_gallium_xa)
+      with_gallium_vdpau)
     dep_xcb_xfixes = dependency('xcb-xfixes')
   endif
   if with_any_vk
@@ -2204,6 +2188,12 @@ endif
 with_gpuvis = get_option('gpuvis')
 if with_gpuvis
   pre_args += '-DHAVE_GPUVIS'
+endif
+
+with_sysprof = get_option('sysprof')
+if with_sysprof
+  dep_sysprof = dependency('sysprof-capture-4', version: '>= 3.38.0')
+  pre_args += '-DHAVE_SYSPROF'
 endif
 
 add_project_arguments(pre_args, language : ['c', 'cpp'])
@@ -2369,18 +2359,17 @@ endif
 if with_gallium_va
   video_apis += 'va'
 endif
+if with_gallium_mediafoundation
+  video_apis += 'mediafoundation'
+endif
 if with_any_vk
   video_apis += 'vulkan'
-endif
-if with_gallium_xa
-  warning('XA will be removed in Mesa 25.2')
-  video_apis += 'xa'
 endif
 video_summary += {'APIs': video_apis.length() != 0 ? video_apis : false}
 summary(video_summary, section: 'Video', bool_yn: true, list_sep: ' ')
 
-llvm_summary = {'Enabled': with_llvm}
-if with_llvm
+llvm_summary = {'Required': with_llvm}
+if dep_llvm.found()
   llvm_summary += {'Version': dep_llvm.version()}
 endif
 summary(llvm_summary, section: 'LLVM', bool_yn: true, list_sep: ' ')
@@ -2391,17 +2380,14 @@ if with_gallium
   gallium_summary += {'Platforms': _platforms}
 
   gallium_frontends = ['mesa']
-  if with_gallium_xa
-    gallium_frontends += 'xa'
-  endif
   if with_gallium_vdpau
     gallium_frontends += 'vdpau'
   endif
   if with_gallium_va
     gallium_frontends += 'va'
   endif
-  if with_gallium_st_nine
-    gallium_frontends += 'nine'
+  if with_gallium_mediafoundation
+    gallium_frontends += 'mediafoundation'
   endif
   if with_gallium_rusticl
     gallium_frontends += 'rusticl'

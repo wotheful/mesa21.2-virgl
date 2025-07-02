@@ -458,9 +458,15 @@ static const struct dri2_format_mapping dri2_format_table[] = {
       { DRM_FORMAT_XRGB8888,      __DRI_IMAGE_FORMAT_XRGB8888,
         __DRI_IMAGE_COMPONENTS_RGB,       PIPE_FORMAT_BGRX8888_UNORM, 1,
         { { 0, 0, 0, __DRI_IMAGE_FORMAT_XRGB8888 } } },
+      { DRM_FORMAT_RGB888,        __DRI_IMAGE_FORMAT_RGB888,
+        __DRI_IMAGE_COMPONENTS_RGB,       PIPE_FORMAT_B8G8R8_UNORM, 1,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_RGB888 } } },
       { DRM_FORMAT_XBGR8888,      __DRI_IMAGE_FORMAT_XBGR8888,
         __DRI_IMAGE_COMPONENTS_RGB,       PIPE_FORMAT_RGBX8888_UNORM, 1,
         { { 0, 0, 0, __DRI_IMAGE_FORMAT_XBGR8888 } } },
+      { DRM_FORMAT_BGR888,        __DRI_IMAGE_FORMAT_BGR888,
+        __DRI_IMAGE_COMPONENTS_RGB,       PIPE_FORMAT_R8G8B8_UNORM, 1,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_BGR888 } } },
       { DRM_FORMAT_ARGB1555,      __DRI_IMAGE_FORMAT_ARGB1555,
         __DRI_IMAGE_COMPONENTS_RGBA,      PIPE_FORMAT_B5G5R5A1_UNORM, 1,
         { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB1555 } } },
@@ -540,6 +546,52 @@ static const struct dri2_format_mapping dri2_format_table[] = {
         { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8 },
           { 2, 0, 0, __DRI_IMAGE_FORMAT_R8 },
           { 1, 0, 0, __DRI_IMAGE_FORMAT_R8 } } },
+
+      { DRM_FORMAT_S010,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_Y10X6_U10X6_V10X6_420_UNORM, 3,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 1, 1, 1, __DRI_IMAGE_FORMAT_R16 },
+          { 2, 1, 1, __DRI_IMAGE_FORMAT_R16 } } },
+      { DRM_FORMAT_S210,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_Y10X6_U10X6_V10X6_422_UNORM, 3,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 1, 1, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 2, 1, 0, __DRI_IMAGE_FORMAT_R16 } } },
+      { DRM_FORMAT_S410,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_Y10X6_U10X6_V10X6_444_UNORM, 3,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 1, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 2, 0, 0, __DRI_IMAGE_FORMAT_R16 } } },
+      { DRM_FORMAT_S012,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_Y12X4_U12X4_V12X4_420_UNORM, 3,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 1, 1, 1, __DRI_IMAGE_FORMAT_R16 },
+          { 2, 1, 1, __DRI_IMAGE_FORMAT_R16 } } },
+      { DRM_FORMAT_S212,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_Y12X4_U12X4_V12X4_422_UNORM, 3,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 1, 1, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 2, 1, 0, __DRI_IMAGE_FORMAT_R16 } } },
+      { DRM_FORMAT_S412,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_Y12X4_U12X4_V12X4_444_UNORM, 3,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 1, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 2, 0, 0, __DRI_IMAGE_FORMAT_R16 } } },
+      { DRM_FORMAT_S016,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_Y16_U16_V16_420_UNORM, 3,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 1, 1, 1, __DRI_IMAGE_FORMAT_R16 },
+          { 2, 1, 1, __DRI_IMAGE_FORMAT_R16 } } },
+      { DRM_FORMAT_S216,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_Y16_U16_V16_422_UNORM, 3,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 1, 1, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 2, 1, 0, __DRI_IMAGE_FORMAT_R16 } } },
+      { DRM_FORMAT_S416,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_Y_U_V,     PIPE_FORMAT_Y16_U16_V16_444_UNORM, 3,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 1, 0, 0, __DRI_IMAGE_FORMAT_R16 },
+          { 2, 0, 0, __DRI_IMAGE_FORMAT_R16 } } },
 
       { DRM_FORMAT_NV12,          __DRI_IMAGE_FORMAT_NONE,
         __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_NV12, 2,
@@ -652,6 +704,18 @@ static const struct dri2_format_mapping dri2_format_table[] = {
         __DRI_IMAGE_COMPONENTS_Y_XUXV,    PIPE_FORMAT_Y216, 2,
         { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR1616 },
           { 0, 1, 0, __DRI_IMAGE_FORMAT_ABGR16161616 } } },
+
+      /* YUV420_8BIT is a single plane with all components, but in an
+         unspecified order */
+      { DRM_FORMAT_YUV420_8BIT,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_XYUV,    PIPE_FORMAT_Y8U8V8_420_UNORM_PACKED, 1,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_NONE } } },
+
+      /* YUV420_10BIT is a single plane with all components, but in an
+         unspecified order */
+      { DRM_FORMAT_YUV420_10BIT,          __DRI_IMAGE_FORMAT_NONE,
+        __DRI_IMAGE_COMPONENTS_XYUV,    PIPE_FORMAT_Y10U10V10_420_UNORM_PACKED, 1,
+        { { 0, 0, 0, __DRI_IMAGE_FORMAT_NONE } } },
 };
 
 const struct dri2_format_mapping *
@@ -679,17 +743,6 @@ dri2_get_mapping_by_format(int format)
    return NULL;
 }
 
-enum pipe_format
-dri2_get_pipe_format_for_dri_format(int format)
-{
-   for (unsigned i = 0; i < ARRAY_SIZE(dri2_format_table); i++) {
-      if (dri2_format_table[i].dri_format == format)
-         return dri2_format_table[i].pipe_format;
-   }
-
-   return PIPE_FORMAT_NONE;
-}
-
 static enum pipe_format
 alt_pipe_format(enum pipe_format yuv_fmt)
 {
@@ -704,6 +757,10 @@ alt_pipe_format(enum pipe_format yuv_fmt)
       return PIPE_FORMAT_R10_G10B10_420_UNORM;
    case PIPE_FORMAT_NV20:
       return PIPE_FORMAT_R10_G10B10_422_UNORM;
+   case PIPE_FORMAT_Y8U8V8_420_UNORM_PACKED:
+      return PIPE_FORMAT_R8G8B8_420_UNORM_PACKED;
+   case PIPE_FORMAT_Y10U10V10_420_UNORM_PACKED:
+      return PIPE_FORMAT_R10G10B10_420_UNORM_PACKED;
    default:
       return yuv_fmt;
    }
@@ -719,8 +776,7 @@ dri2_yuv_dma_buf_supported(struct dri_screen *screen,
                                     screen->target, 0, 0, PIPE_BIND_SAMPLER_VIEW))
       return true;
    for (unsigned i = 0; i < map->nplanes; i++) {
-      if (!pscreen->is_format_supported(pscreen,
-            dri2_get_pipe_format_for_dri_format(map->planes[i].dri_format),
+      if (!pscreen->is_format_supported(pscreen, map->planes[i].dri_format,
             screen->target, 0, 0, PIPE_BIND_SAMPLER_VIEW))
          return false;
    }

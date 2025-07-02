@@ -1,10 +1,12 @@
 include:
   - local: src/panfrost/ci/gitlab-ci-inc.yml
 
+# We only have two machines and these boards are EOL.
+# Put it in nightly until we can move to different boards.
 panfrost-t720-gles2:arm64:
   extends:
     - .lava-arm64-test-gl
-    - .panfrost-midgard-rules
+    - .panfrost-midgard-manual-rules
     - .panfrost-test
     - .lava-sun50i-h6-pine-h64:arm64
 
@@ -16,6 +18,7 @@ panfrost-t760-gles:arm32:
     - .panfrost-midgard-manual-rules
     - .panfrost-test
     - .lava-rk3288-veyron-jaq:arm32
+  timeout: 1h 30m
 
 panfrost-t760-traces:arm32:
   extends:
@@ -108,6 +111,7 @@ panfrost-g52-vk-full:arm64:
     DEQP_FRACTION: 1
 
 panfrost-g52-piglit:arm64:
+  parallel: 2
   extends:
     - .lava-arm64-test-gl
     - .panfrost-bifrost-gl-manual-rules
@@ -190,7 +194,7 @@ panfrost-g610-vk:arm64:
     MESA_VK_IGNORE_CONFORMANCE_WARNING: 1
     PANVK_DEBUG: "no_known_warn,sync,cs"
     DEQP_SUITE: panfrost-g610-vk
-    DEQP_FRACTION: 4
+    DEQP_FRACTION: 5
     HWCI_START_WESTON: 1
     LAVA_TAGS: at-least-8gb
 

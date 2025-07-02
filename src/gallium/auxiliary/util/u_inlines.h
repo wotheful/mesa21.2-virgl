@@ -154,7 +154,7 @@ pipe_surface_reference(struct pipe_surface **dst, struct pipe_surface *src)
  * that's shared by multiple contexts.
  */
 static inline void
-pipe_surface_release(struct pipe_context *pipe, struct pipe_surface **ptr)
+pipe_surface_unref(struct pipe_context *pipe, struct pipe_surface **ptr)
 {
    struct pipe_surface *old = *ptr;
 
@@ -207,25 +207,6 @@ pipe_drop_resource_references(struct pipe_resource *dst, int num_refs)
    /* Underflows shouldn't happen, but let's be safe. */
    if (count <= 0)
       pipe_resource_destroy(dst);
-}
-
-/**
- * Same as pipe_surface_release, but used when pipe_context doesn't exist
- * anymore.
- */
-static inline void
-pipe_surface_release_no_context(struct pipe_surface **ptr)
-{
-   struct pipe_surface *surf = *ptr;
-
-   if (pipe_reference_described(&surf->reference, NULL,
-                                (debug_reference_descriptor)
-                                debug_describe_surface)) {
-      /* trivially destroy pipe_surface */
-      pipe_resource_reference(&surf->texture, NULL);
-      free(surf);
-   }
-   *ptr = NULL;
 }
 
 /**
@@ -344,8 +325,8 @@ pipe_surface_reset(struct pipe_context *ctx, struct pipe_surface* ps,
 {
    pipe_resource_reference(&ps->texture, pt);
    ps->format = pt->format;
-   ps->u.tex.level = level;
-   ps->u.tex.first_layer = ps->u.tex.last_layer = layer;
+   ps->level = level;
+   ps->first_layer = ps->last_layer = layer;
    ps->context = ctx;
 }
 
@@ -361,12 +342,7 @@ pipe_surface_init(struct pipe_context *ctx, struct pipe_surface* ps,
 static inline unsigned
 pipe_surface_width(const struct pipe_surface *ps)
 {
-   if (ps->texture->target == PIPE_BUFFER) {
-      /* TODO: delete clover */
-      return ps->u.buf.last_element - ps->u.buf.first_element + 1;
-   }
-
-   unsigned width = (uint16_t)u_minify(ps->texture->width0, ps->u.tex.level);
+   unsigned width = (uint16_t)u_minify(ps->texture->width0, ps->level);
 
    /* adjust texture view size to get full blocksize on compressed formats */
    if (!util_format_is_depth_or_stencil(ps->texture->format) && ps->format != ps->texture->format) {
@@ -386,12 +362,7 @@ pipe_surface_width(const struct pipe_surface *ps)
 static inline unsigned
 pipe_surface_height(const struct pipe_surface *ps)
 {
-   if (ps->texture->target == PIPE_BUFFER) {
-      /* TODO: delete clover */
-      return ps->texture->height0;
-   }
-
-   unsigned height = u_minify(ps->texture->height0, ps->u.tex.level);
+   unsigned height = u_minify(ps->texture->height0, ps->level);
 
    /* adjust texture view size to get full blocksize on compressed formats */
    if (!util_format_is_depth_or_stencil(ps->texture->format) && ps->format != ps->texture->format) {
@@ -421,18 +392,15 @@ pipe_surface_size(const struct pipe_surface *ps, uint16_t *width, uint16_t *heig
 
 /* Return true if the surfaces are equal. */
 static inline bool
-pipe_surface_equal(struct pipe_surface *s1, struct pipe_surface *s2)
+pipe_surface_equal(const struct pipe_surface *s1, const struct pipe_surface *s2)
 {
-   return s1->texture == s2->texture &&
+   return !!s1 == !!s2 && s1->texture == s2->texture &&
           s1->format == s2->format &&
           s1->nr_samples == s2->nr_samples &&
-          (s1->texture->target != PIPE_BUFFER ||
-           (s1->u.buf.first_element == s2->u.buf.first_element &&
-            s1->u.buf.last_element == s2->u.buf.last_element)) &&
-          (s1->texture->target == PIPE_BUFFER ||
-           (s1->u.tex.level == s2->u.tex.level &&
-            s1->u.tex.first_layer == s2->u.tex.first_layer &&
-            s1->u.tex.last_layer == s2->u.tex.last_layer));
+          (!s1->texture ||
+           (s1->level == s2->level &&
+            s1->first_layer == s2->first_layer &&
+            s1->last_layer == s2->last_layer));
 }
 
 /*

@@ -53,8 +53,6 @@ main()
    VOID_REF src_bvh = OFFSET(args.src, bvh_offset);
    VOID_REF dst_bvh = OFFSET(args.dst, bvh_offset);
 
-   VOID_REF leaf_node_offsets = OFFSET(args.src, DEREF(args.src).leaf_node_offsets_offset);
-
    uint32_t leaf_node_size = SIZEOF(radv_gfx12_primitive_node);
    uint32_t first_leaf_offset = id_to_offset(RADV_BVH_ROOT_NODE) + SIZEOF(radv_gfx12_box_node);
    uint32_t internal_nodes_offset = first_leaf_offset + args.leaf_node_count * leaf_node_size;
@@ -67,8 +65,6 @@ main()
    /* Each invocation cluster updates one internal node. */
    radv_invocation_cluster cluster;
    radv_invocation_cluster_init(cluster, 8);
-
-   uint32_t compacted_size = uint32_t(DEREF(args.src).compacted_size);
 
    uint32_t node_offset = internal_nodes_offset + SIZEOF(radv_gfx12_box_node) * (node_index - 1);
    if (is_root_node)
@@ -83,7 +79,7 @@ main()
    uint32_t child_type = (child.dword2 >> 24) & 0xf;
 
    bool is_leaf_or_invalid = child_type == radv_bvh_node_triangle;
-   bool is_valid = cluster.invocation_index <= valid_child_count_minus_one;
+   bool is_valid = cluster.invocation_index <= valid_child_count_minus_one && valid_child_count_minus_one != 0xf;
    bool is_leaf = is_leaf_or_invalid && is_valid;
 
    uint32_t child_offset;
@@ -140,6 +136,10 @@ main()
 
       if (!is_root_node) {
          DEREF(INDEX(vk_aabb, args.bounds, node_index - 1)) = total_bounds;
+
+         memoryBarrier(gl_ScopeDevice, gl_StorageSemanticsBuffer,
+                       gl_SemanticsAcquireRelease | gl_SemanticsMakeAvailable | gl_SemanticsMakeVisible);
+
          DEREF(INDEX(uint32_t, args.internal_ready_count, node_index - 1)) = 1;
       }
 
@@ -184,7 +184,7 @@ main()
       if (is_root_node)
          DEREF(args.dst).aabb = total_bounds;
 
-      /* Make changes to the children's BVH offset value available to the other invocations. */
+      /* Make changes to internal_ready_count available to the other invocations. */
       memoryBarrier(gl_ScopeDevice, gl_StorageSemanticsBuffer,
                     gl_SemanticsAcquireRelease | gl_SemanticsMakeAvailable | gl_SemanticsMakeVisible);
       break;

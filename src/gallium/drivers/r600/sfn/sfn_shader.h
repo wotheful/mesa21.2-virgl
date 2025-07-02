@@ -20,6 +20,8 @@
 #include <stack>
 #include <vector>
 
+#define R600_GS_VERTEX_INDIRECT_TOTAL 6
+
 struct nir_shader;
 struct nir_cf_node;
 struct nir_if;
@@ -263,6 +265,9 @@ protected:
       es_tess_coord,
       es_primitive_id,
       es_helper_invocation,
+      es_base_instance,
+      es_base_vertex,
+      es_draw_id,
       es_last
    };
 

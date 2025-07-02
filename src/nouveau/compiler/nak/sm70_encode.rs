@@ -40,12 +40,6 @@ impl BitMutViewable for SM70Encoder<'_> {
     }
 }
 
-impl SetFieldU64 for SM70Encoder<'_> {
-    fn set_field_u64(&mut self, range: Range<usize>, val: u64) {
-        BitMutView::new(&mut self.inst).set_field_u64(range, val);
-    }
-}
-
 impl SM70Encoder<'_> {
     /// Maximum encodable UGPR
     ///
@@ -220,11 +214,13 @@ impl SM70Encoder<'_> {
 
     fn set_instr_deps(&mut self, deps: &InstrDeps) {
         self.set_field(105..109, deps.delay);
-        self.set_bit(109, deps.yld);
         self.set_field(110..113, deps.wr_bar().unwrap_or(7));
         self.set_field(113..116, deps.rd_bar().unwrap_or(7));
         self.set_field(116..122, deps.wt_bar_mask);
-        self.set_field(122..126, deps.reuse_mask);
+        if self.sm < 120 {
+            self.set_bit(109, deps.yld);
+            self.set_field(122..126, deps.reuse_mask);
+        }
     }
 }
 
@@ -918,7 +914,7 @@ impl SM70Op for OpFSwzAdd {
 
         e.set_field(32..40, subop);
 
-        e.set_bit(77, false); // NDV
+        e.set_tex_ndv(77, self.deriv_mode);
         e.set_rnd_mode(78..80, self.rnd_mode);
         e.set_bit(80, self.ftz);
     }
@@ -1564,7 +1560,7 @@ impl SM70Op for OpIMnMx {
         );
         if e.sm >= 120 {
             e.set_bit(74, false); // 64-bit
-            e.set_pred_src(77..80, 80, &true.into());
+            e.set_pred_src(77..80, 80, &false.into());
             e.set_pred_dst(81..84, &Dst::None);
             e.set_pred_dst(84..87, &Dst::None);
         }
@@ -1921,9 +1917,7 @@ impl SM70Op for OpF2F {
 impl SM70Op for OpF2FP {
     fn legalize(&mut self, b: &mut LegalizeBuilder) {
         let gpr = op_gpr(self);
-        let [src0, src1] = &mut self.srcs;
-        swap_srcs_if_not_reg(src0, src1, gpr);
-
+        let [src0, _src1] = &mut self.srcs;
         b.copy_alu_src_if_not_reg(src0, gpr, SrcType::ALU);
     }
 
@@ -2254,10 +2248,47 @@ impl SM70Op for OpR2UR {
     }
 
     fn encode(&self, e: &mut SM70Encoder<'_>) {
-        e.set_opcode(0x3c2);
+        if e.sm >= 100 {
+            e.set_opcode(0x2ca);
+        } else {
+            e.set_opcode(0x3c2);
+        }
         e.set_udst(&self.dst);
         e.set_reg_src(24..32, &self.src);
         e.set_pred_dst(81..84, &Dst::None);
+    }
+}
+
+impl SM70Op for OpRedux {
+    fn legalize(&mut self, b: &mut LegalizeBuilder) {
+        b.copy_alu_src_if_not_reg(&mut self.src, RegFile::GPR, SrcType::GPR);
+    }
+
+    fn encode(&self, e: &mut SM70Encoder<'_>) {
+        e.set_opcode(0x3c4);
+        e.set_udst(&self.dst);
+        e.set_reg_src(24..32, &self.src);
+
+        e.set_bit(
+            73,
+            match self.op {
+                ReduxOp::Min(cmp_type) | ReduxOp::Max(cmp_type) => {
+                    cmp_type == IntCmpType::I32
+                }
+                _ => false,
+            },
+        );
+        e.set_field(
+            78..81,
+            match self.op {
+                ReduxOp::And => 0_u8,
+                ReduxOp::Or => 1,
+                ReduxOp::Xor => 2,
+                ReduxOp::Sum => 3,
+                ReduxOp::Min(_) => 4,
+                ReduxOp::Max(_) => 5,
+            },
+        );
     }
 }
 
@@ -2288,36 +2319,72 @@ impl SM70Encoder<'_> {
 
     fn set_tex_lod_mode(&mut self, range: Range<usize>, lod_mode: TexLodMode) {
         assert!(range.len() == 3);
-        if self.sm >= 100 {
-            self.set_field(
-                range,
-                match lod_mode {
-                    TexLodMode::Auto => 0_u8,
-                    TexLodMode::Bias => 1_u8,
-                    TexLodMode::Clamp => 2_u8,
-                    // ulb => 0x3
-                    // ulc => 0x4
-                    // lb.ulc => 0x5
-                    TexLodMode::BiasClamp => todo!(),
+        assert!(self.sm <= 100);
 
-                    TexLodMode::Zero => 0_u8,
-                    TexLodMode::Lod => 1_u8,
-                    // ull => 3
-                },
-            );
-        } else {
-            self.set_field(
-                range,
-                match lod_mode {
-                    TexLodMode::Auto => 0_u8,
-                    TexLodMode::Zero => 1_u8,
-                    TexLodMode::Bias => 2_u8,
-                    TexLodMode::Lod => 3_u8,
-                    TexLodMode::Clamp => 4_u8,
-                    TexLodMode::BiasClamp => 5_u8,
-                },
-            );
-        }
+        self.set_field(
+            range,
+            match lod_mode {
+                TexLodMode::Auto => 0_u8,
+                TexLodMode::Zero => 1_u8,
+                TexLodMode::Bias => 2_u8,
+                TexLodMode::Lod => 3_u8,
+                TexLodMode::Clamp => 4_u8,
+                TexLodMode::BiasClamp => 5_u8,
+            },
+        );
+    }
+
+    fn set_tex_lod_mode2(
+        &mut self,
+        range1: Range<usize>,
+        range2: Range<usize>,
+        lod_mode: TexLodMode,
+    ) {
+        self.set_field2(
+            range1,
+            range2,
+            match lod_mode {
+                TexLodMode::Auto => 0_u8,
+                TexLodMode::Zero => 1_u8,
+                TexLodMode::Bias => 2_u8,
+                TexLodMode::Lod => 3_u8,
+                TexLodMode::Clamp => 4_u8,
+                TexLodMode::BiasClamp => 5_u8,
+            },
+        );
+    }
+
+    fn set_tex_ndv(&mut self, bit: usize, deriv_mode: TexDerivMode) {
+        let ndv = match deriv_mode {
+            TexDerivMode::Auto => false,
+            TexDerivMode::NonDivergent => true,
+            _ => panic!("{deriv_mode} is not supported"),
+        };
+        self.set_bit(bit, ndv);
+    }
+
+    fn set_tex_deriv_mode(
+        &mut self,
+        range: Range<usize>,
+        deriv_mode: TexDerivMode,
+    ) {
+        assert!(range.len() == 2);
+        assert!(self.sm >= 100);
+        self.set_field(
+            range,
+            match deriv_mode {
+                TexDerivMode::Auto => 0_u8,
+                TexDerivMode::NonDivergent => 1_u8,
+                TexDerivMode::ForceDivergent => {
+                    assert!(self.sm >= 100 && self.sm < 110);
+                    2_u8
+                }
+                TexDerivMode::DerivXY => {
+                    assert!(self.sm >= 120);
+                    3_u8
+                }
+            },
+        );
     }
 
     fn set_image_dim(&mut self, range: Range<usize>, dim: ImageDim) {
@@ -2410,19 +2477,34 @@ impl SM70Op for OpTex {
 
         e.set_reg_src(24..32, &self.srcs[0]);
         e.set_reg_src(32..40, &self.srcs[1]);
-
         if e.sm >= 100 {
-            e.set_field(48..56, 0xff_u8); // ureg
-            e.set_bit(59, self.lod_mode.is_explicit_lod());
+            e.set_ureg_src(40..48, &Src::ZERO); // handle
+            e.set_ureg_src(48..56, &Src::ZERO); // offset
         }
 
         e.set_tex_dim(61..64, self.dim);
         e.set_tex_channel_mask(72..76, self.channel_mask);
-        e.set_bit(76, self.offset_mode == TexOffsetMode::AddOffI);
-        e.set_bit(77, false); // ToDo: NDV
+        if e.sm >= 100 {
+            e.set_field(
+                56..58,
+                match self.offset_mode {
+                    TexOffsetMode::None => 0_u8,
+                    TexOffsetMode::AddOffI => 1_u8,
+                    TexOffsetMode::PerPx => panic!("Illegal offset value"),
+                },
+            );
+            e.set_tex_deriv_mode(76..78, self.deriv_mode);
+        } else {
+            e.set_bit(76, self.offset_mode == TexOffsetMode::AddOffI);
+            e.set_tex_ndv(77, self.deriv_mode);
+        }
         e.set_bit(78, self.z_cmpr);
         e.set_eviction_priority(&self.mem_eviction_priority);
-        e.set_tex_lod_mode(87..90, self.lod_mode);
+        if e.sm >= 100 {
+            e.set_tex_lod_mode2(59..60, 87..90, self.lod_mode);
+        } else {
+            e.set_tex_lod_mode(87..90, self.lod_mode);
+        }
         e.set_bit(90, self.nodep);
     }
 }
@@ -2463,21 +2545,41 @@ impl SM70Op for OpTld {
 
         e.set_reg_src(24..32, &self.srcs[0]);
         e.set_reg_src(32..40, &self.srcs[1]);
-
         if e.sm >= 100 {
-            e.set_field(48..56, 0xff_u8); // ureg
+            e.set_ureg_src(40..48, &Src::ZERO); // handle
+            e.set_ureg_src(48..56, &Src::ZERO); // offset
         }
 
+        if e.sm >= 100 {
+            e.set_field(
+                56..58,
+                match self.offset_mode {
+                    TexOffsetMode::None => 0_u8,
+                    TexOffsetMode::AddOffI => 1_u8,
+                    TexOffsetMode::PerPx => panic!("Illegal offset value"),
+                },
+            );
+        } else {
+            e.set_bit(76, self.offset_mode == TexOffsetMode::AddOffI);
+        }
         e.set_tex_dim(61..64, self.dim);
         e.set_tex_channel_mask(72..76, self.channel_mask);
-        e.set_bit(76, self.offset_mode == TexOffsetMode::AddOffI);
 
-        // bit 77: .CL
-        e.set_bit(78, self.is_ms);
+        if e.sm >= 120 {
+            // MS vs UMS
+            e.set_bit(77, self.is_ms);
+        } else {
+            // bit 77: .CL
+            e.set_bit(78, self.is_ms);
+        }
         // bits 79..81: .F16
         e.set_eviction_priority(&self.mem_eviction_priority);
         assert!(self.lod_mode.is_explicit_lod());
-        e.set_tex_lod_mode(87..90, self.lod_mode);
+        if e.sm >= 100 {
+            e.set_tex_lod_mode2(59..60, 87..90, self.lod_mode);
+        } else {
+            e.set_tex_lod_mode(87..90, self.lod_mode);
+        }
         e.set_bit(90, self.nodep);
     }
 }
@@ -2518,9 +2620,9 @@ impl SM70Op for OpTld4 {
 
         e.set_reg_src(24..32, &self.srcs[0]);
         e.set_reg_src(32..40, &self.srcs[1]);
-
         if e.sm >= 100 {
-            e.set_field(48..56, 0xff_u8); // ureg
+            e.set_ureg_src(40..48, &Src::ZERO); // handle
+            e.set_ureg_src(48..56, &Src::ZERO); // offset
         }
 
         e.set_tex_dim(61..64, self.dim);
@@ -2571,10 +2673,17 @@ impl SM70Op for OpTmml {
 
         e.set_reg_src(24..32, &self.srcs[0]);
         e.set_reg_src(32..40, &self.srcs[1]);
+        if e.sm >= 100 {
+            e.set_ureg_src(40..48, &Src::ZERO); // handle
+        }
 
         e.set_tex_dim(61..64, self.dim);
         e.set_tex_channel_mask(72..76, self.channel_mask);
-        e.set_bit(77, false); // ToDo: NDV
+        if e.sm >= 100 {
+            e.set_tex_deriv_mode(76..78, self.deriv_mode);
+        } else {
+            e.set_tex_ndv(77, self.deriv_mode);
+        }
         e.set_bit(90, self.nodep);
     }
 }
@@ -2615,15 +2724,26 @@ impl SM70Op for OpTxd {
 
         e.set_reg_src(24..32, &self.srcs[0]);
         e.set_reg_src(32..40, &self.srcs[1]);
-
         if e.sm >= 100 {
-            e.set_field(48..56, 0xff_u8); // ureg
+            e.set_ureg_src(40..48, &Src::ZERO); // handle
+            e.set_ureg_src(48..56, &Src::ZERO); // offset
         }
 
+        if e.sm >= 100 {
+            e.set_field(
+                56..58,
+                match self.offset_mode {
+                    TexOffsetMode::None => 0_u8,
+                    TexOffsetMode::AddOffI => 1_u8,
+                    TexOffsetMode::PerPx => panic!("Illegal offset value"),
+                },
+            );
+        } else {
+            e.set_bit(76, self.offset_mode == TexOffsetMode::AddOffI);
+        }
         e.set_tex_dim(61..64, self.dim);
         e.set_tex_channel_mask(72..76, self.channel_mask);
-        e.set_bit(76, self.offset_mode == TexOffsetMode::AddOffI);
-        e.set_bit(77, false); // ToDo: NDV
+
         e.set_eviction_priority(&self.mem_eviction_priority);
         e.set_bit(90, self.nodep);
     }
@@ -2658,6 +2778,10 @@ impl SM70Op for OpTxq {
         }
 
         e.set_reg_src(24..32, &self.src);
+        if e.sm >= 100 {
+            e.set_ureg_src(40..48, &Src::ZERO); // handle
+        }
+
         e.set_field(
             62..64,
             match self.query {
@@ -2758,6 +2882,12 @@ impl SM70Encoder<'_> {
 impl SM70Op for OpSuLd {
     fn legalize(&mut self, b: &mut LegalizeBuilder) {
         legalize_ext_instr(self, b);
+
+        // suld.constant doesn't exist on Volta or Turing but it's always safe
+        // to silently degrade to suld.weak
+        if self.mem_order == MemOrder::Constant && b.sm() < 80 {
+            self.mem_order = MemOrder::Weak;
+        }
     }
 
     fn encode(&self, e: &mut SM70Encoder<'_>) {
@@ -2838,7 +2968,7 @@ impl SM70Op for OpSuAtom {
         e.set_eviction_priority(&self.mem_eviction_priority);
 
         e.set_bit(72, false); // .BA
-        e.set_atom_type(self.atom_type);
+        e.set_atom_type(self.atom_type, true);
     }
 }
 
@@ -3034,8 +3164,8 @@ impl SM70Encoder<'_> {
         );
     }
 
-    fn set_atom_type(&mut self, atom_type: AtomType) {
-        if self.sm >= 90 {
+    fn set_atom_type(&mut self, atom_type: AtomType, su: bool) {
+        if self.sm >= 90 && !su {
             // Float/int is differentiated by opcode
             self.set_field(
                 73..77,
@@ -3159,7 +3289,7 @@ impl SM70Op for OpAtom {
         e.set_dst(&self.dst);
         e.set_reg_src(24..32, &self.addr);
         e.set_field(40..64, self.addr_offset);
-        e.set_atom_type(self.atom_type);
+        e.set_atom_type(self.atom_type, false);
     }
 }
 
@@ -3346,7 +3476,6 @@ impl SM70Encoder<'_> {
 
     fn set_rel_offset(&mut self, range: Range<usize>, label: &Label) {
         let rel_offset = self.get_rel_offset(label);
-
         self.set_field(range, rel_offset);
     }
 
@@ -3357,9 +3486,7 @@ impl SM70Encoder<'_> {
         label: &Label,
     ) {
         let rel_offset = self.get_rel_offset(label);
-        let shift = range1.len();
-        self.set_field(range1, (rel_offset as u64) & ((1 << shift) - 1));
-        self.set_field(range2, rel_offset >> shift);
+        self.set_field2(range1, range2, rel_offset);
     }
 }
 
@@ -3666,6 +3793,33 @@ impl SM70Op for OpVote {
     }
 }
 
+impl SM70Op for OpMatch {
+    fn legalize(&mut self, b: &mut LegalizeBuilder) {
+        legalize_ext_instr(self, b);
+    }
+
+    fn encode(&self, e: &mut SM70Encoder<'_>) {
+        e.set_opcode(0x3a1);
+
+        e.set_dst(&self.mask);
+        e.set_reg_src(24..32, &self.src);
+        e.set_bit(73, self.u64);
+
+        e.set_bit(
+            79,
+            match self.op {
+                MatchOp::Any => {
+                    assert!(matches!(self.pred, Dst::None));
+                    true
+                }
+                MatchOp::All => false,
+            },
+        );
+
+        e.set_pred_dst(81..84, &self.pred);
+    }
+}
+
 macro_rules! as_sm70_op_match {
     ($op: expr) => {
         match $op {
@@ -3714,6 +3868,7 @@ macro_rules! as_sm70_op_match {
             Op::Shfl(op) => op,
             Op::PLop3(op) => op,
             Op::R2UR(op) => op,
+            Op::Redux(op) => op,
             Op::Tex(op) => op,
             Op::Tld(op) => op,
             Op::Tld4(op) => op,
@@ -3752,6 +3907,7 @@ macro_rules! as_sm70_op_match {
             Op::Out(op) => op,
             Op::OutFinal(op) => op,
             Op::Vote(op) => op,
+            Op::Match(op) => op,
             _ => panic!("Unsupported op: {}", $op),
         }
     };

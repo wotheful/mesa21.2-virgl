@@ -171,22 +171,22 @@ dri2_drawable_get_buffers(struct dri_drawable *drawable,
       case PIPE_FORMAT_R10G10B10A2_UNORM:
       case PIPE_FORMAT_BGRA8888_UNORM:
       case PIPE_FORMAT_RGBA8888_UNORM:
-	 depth = 32;
-	 break;
+         depth = 32;
+         break;
       case PIPE_FORMAT_R10G10B10X2_UNORM:
       case PIPE_FORMAT_B10G10R10X2_UNORM:
          depth = 30;
          break;
       case PIPE_FORMAT_BGRX8888_UNORM:
       case PIPE_FORMAT_RGBX8888_UNORM:
-	 depth = 24;
-	 break;
+         depth = 24;
+         break;
       case PIPE_FORMAT_B5G6R5_UNORM:
-	 depth = 16;
-	 break;
+         depth = 16;
+         break;
       default:
-	 depth = util_format_get_blocksizebits(format);
-	 assert(!"Unexpected format in dri2_drawable_get_buffers()");
+         depth = util_format_get_blocksizebits(format);
+         assert(!"Unexpected format in dri2_drawable_get_buffers()");
       }
 
       attachments[num_attachments++] = att;
@@ -791,6 +791,24 @@ static const struct dri2_format_mapping r10_g10b10_mapping_422 = {
      { 1, 1, 0, __DRI_IMAGE_FORMAT_NONE } }
 };
 
+static const struct dri2_format_mapping r8g8b8_420_mapping = {
+   DRM_FORMAT_YUV420_8BIT,
+   __DRI_IMAGE_FORMAT_NONE,
+   __DRI_IMAGE_COMPONENTS_XYUV,
+   PIPE_FORMAT_R8G8B8_420_UNORM_PACKED,
+   1,
+   { { 0, 0, 0, __DRI_IMAGE_FORMAT_NONE } },
+};
+
+static const struct dri2_format_mapping r10g10b10_420_mapping = {
+   DRM_FORMAT_YUV420_10BIT,
+   __DRI_IMAGE_FORMAT_NONE,
+   __DRI_IMAGE_COMPONENTS_XYUV,
+   PIPE_FORMAT_R10G10B10_420_UNORM_PACKED,
+   1,
+   { { 0, 0, 0, __DRI_IMAGE_FORMAT_NONE } },
+};
+
 static enum __DRIFixedRateCompression
 to_dri_compression_rate(uint32_t rate)
 {
@@ -902,6 +920,20 @@ dri_create_image_from_winsys(struct dri_screen *screen,
       tex_usage |= PIPE_BIND_SAMPLER_VIEW;
    }
 
+   /* For YUV420_8BIT, see if we have support for sampling r8b8g8_420 */
+   if (!tex_usage && map->pipe_format == PIPE_FORMAT_Y8U8V8_420_UNORM_PACKED &&
+       pscreen->is_format_supported(pscreen, PIPE_FORMAT_R8G8B8_420_UNORM_PACKED,
+                                    screen->target, 0, 0, PIPE_BIND_SAMPLER_VIEW)) {
+      map = &r8g8b8_420_mapping;
+      tex_usage |= PIPE_BIND_SAMPLER_VIEW;
+   }
+   if (!tex_usage && map->pipe_format == PIPE_FORMAT_Y10U10V10_420_UNORM_PACKED &&
+       pscreen->is_format_supported(pscreen, PIPE_FORMAT_R10G10B10_420_UNORM_PACKED,
+                                    screen->target, 0, 0, PIPE_BIND_SAMPLER_VIEW)) {
+      map = &r10g10b10_420_mapping;
+      tex_usage |= PIPE_BIND_SAMPLER_VIEW;
+   }
+
    /* For YV12 and I420, see if we have support for sampling r8_b8_g8 or r8_g8_b8 */
    if (!tex_usage && map->pipe_format == PIPE_FORMAT_IYUV) {
       if (map->dri_fourcc == DRM_FORMAT_YUV420 &&
@@ -999,7 +1031,7 @@ dri_create_image_from_winsys(struct dri_screen *screen,
       templ.width0 = width >> map->planes[i].width_shift;
       templ.height0 = height >> map->planes[i].height_shift;
       if (use_lowered)
-         templ.format = dri2_get_pipe_format_for_dri_format(map->planes[i].dri_format);
+         templ.format = map->planes[i].dri_format;
       else
          templ.format = map->pipe_format;
       assert(templ.format != PIPE_FORMAT_NONE);
@@ -1389,6 +1421,7 @@ dri2_dup_image(struct dri_image *image, void *loaderPrivate)
    img->level = image->level;
    img->layer = image->layer;
    img->dri_format = image->dri_format;
+   img->dri_fourcc = image->dri_fourcc;
    img->internal_format = image->internal_format;
    /* This should be 0 for sub images, but dup is also used for base images. */
    img->dri_components = image->dri_components;

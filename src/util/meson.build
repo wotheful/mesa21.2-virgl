@@ -44,6 +44,7 @@ files_mesa_util = files(
   'enum_operators.h',
   'fast_idiv_by_const.c',
   'fast_idiv_by_const.h',
+  'float8.c',
   'format_r11g11b10f.h',
   'format_rgb9e5.h',
   'format_srgb.h',
@@ -277,10 +278,18 @@ if with_gpuvis
   )
 endif
 
+if with_sysprof
+  files_mesa_util += files(
+    'perf/u_sysprof.c',
+    'perf/u_sysprof.h',
+  )
+  deps_for_libmesa_util += dep_sysprof
+endif
+
 u_trace_py = files('perf/u_trace.py')
 
-libmesa_util_sse41 = static_library(
-  'mesa_util_sse41',
+libmesa_util_simd = static_library(
+  'mesa_util_simd',
   files('streaming-load-memcpy.c'),
   c_args : [c_msvc_compat_args, sse41_args],
   include_directories : [inc_util],
@@ -293,7 +302,7 @@ _libmesa_util = static_library(
   [files_mesa_util, files_debug_stack, format_srgb],
   include_directories : [inc_util, include_directories('format')],
   dependencies : deps_for_libmesa_util,
-  link_with: [libmesa_util_sse41],
+  link_with: [libmesa_util_simd],
   c_args : [c_msvc_compat_args],
   gnu_symbol_visibility : 'hidden',
   build_by_default : false
@@ -383,6 +392,7 @@ if with_tests
     'tests/dag_test.cpp',
     'tests/fast_idiv_by_const_test.cpp',
     'tests/fast_urem_by_const_test.cpp',
+    'tests/float8_test.cpp',
     'tests/gc_alloc_tests.cpp',
     'tests/half_float_test.cpp',
     'tests/int_min_max.cpp',

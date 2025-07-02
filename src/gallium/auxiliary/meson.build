@@ -423,7 +423,6 @@ files_libgalliumvl = files(
   'vl/vl_video_buffer.h',
   'vl/vl_zscan.c',
   'vl/vl_zscan.h',
-  'vl/vl_probs_table.h',
 )
 
 vlwinsys_deps = []
@@ -561,7 +560,7 @@ libgalliumvl = static_library(
 
 # some drivers export their screen creation function globally, so all frontends have to contain the
 # full libgalliumvl. So we'll handle this here globally for everybody.
-if (with_gallium_va or with_gallium_vdpau or with_dri or with_gallium_radeonsi)
+if (with_gallium_mediafoundation or with_gallium_va or with_gallium_vdpau or with_dri or with_gallium_radeonsi)
   libgalliumvl_stub = libgalliumvl
 else
   libgalliumvl_stub = _libgalliumvl_stub

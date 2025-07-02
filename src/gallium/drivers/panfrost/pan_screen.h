@@ -41,7 +41,6 @@
 
 #include "pan_device.h"
 #include "pan_mempool.h"
-#include "pan_texture.h"
 
 #define PAN_QUERY_DRAW_CALLS (PIPE_QUERY_DRIVER_SPECIFIC + 0)
 
@@ -86,7 +85,7 @@ struct panfrost_vtable {
       struct pan_blend_shader_cache *cache, const struct pan_blend_state *,
       nir_alu_type, nir_alu_type, unsigned rt);
 
-   void (*compile_shader)(nir_shader *s, struct panfrost_compile_inputs *inputs,
+   void (*compile_shader)(nir_shader *s, struct pan_compile_inputs *inputs,
                           struct util_dynarray *binary,
                           struct pan_shader_info *info);
 
@@ -126,6 +125,7 @@ struct panfrost_screen {
    struct disk_cache *disk_cache;
    unsigned max_afbc_packing_ratio;
    bool force_afbc_packing;
+   bool allow_128bit_rts_v4;
    int force_afrc_rate;
    uint64_t compute_core_mask;
    uint64_t fragment_core_mask;

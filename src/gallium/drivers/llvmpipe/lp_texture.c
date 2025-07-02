@@ -442,6 +442,15 @@ llvmpipe_resource_create_unbacked(struct pipe_screen *_screen,
    return pt;
 }
 
+static uint64_t
+llvmpipe_resource_get_address(struct pipe_screen *_screen,
+                              struct pipe_resource *resource)
+{
+   struct llvmpipe_resource *lp_res = llvmpipe_resource(resource);
+   assert(resource->target == PIPE_BUFFER);
+   return (uint64_t)(uintptr_t)lp_res->data;
+}
+
 
 static struct pipe_memory_object *
 llvmpipe_memobj_create_from_handle(struct pipe_screen *pscreen,
@@ -1379,7 +1388,7 @@ llvmpipe_resource_alloc_udmabuf(struct llvmpipe_screen *screen,
 
       size = align(size, alignment);
 
-      int mem_fd = memfd_create("lp_dma_buf", MFD_ALLOW_SEALING);
+      mem_fd = memfd_create("lp_dma_buf", MFD_ALLOW_SEALING);
       if (mem_fd == -1)
          goto fail;
 
@@ -1400,7 +1409,7 @@ llvmpipe_resource_alloc_udmabuf(struct llvmpipe_screen *screen,
          .size = size
       };
 
-      int dmabuf_fd = ioctl(screen->udmabuf_fd, UDMABUF_CREATE, &create);
+      dmabuf_fd = ioctl(screen->udmabuf_fd, UDMABUF_CREATE, &create);
       if (dmabuf_fd < 0)
          goto fail;
 
@@ -1417,10 +1426,10 @@ llvmpipe_resource_alloc_udmabuf(struct llvmpipe_screen *screen,
    }
 
 fail:
+   if (dmabuf_fd >= 0)
+      close(dmabuf_fd);
    if (mem_fd != -1)
       close(mem_fd);
-   if (dmabuf_fd != -1)
-      close(dmabuf_fd);
    /* If we don't have access to the udmabuf device
     * or something else fails we return NULL */
    return NULL;
@@ -1482,6 +1491,12 @@ llvmpipe_import_memory_fd(struct pipe_screen *screen,
 #if defined(HAVE_LIBDRM) && defined(HAVE_LINUX_UDMABUF_H)
    if (dmabuf) {
       off_t mmap_size = lseek(fd, 0, SEEK_END);
+      if (mmap_size < 0) {
+         free(alloc);
+         *ptr = NULL;
+         return false;
+      }
+
       lseek(fd, 0, SEEK_SET);
       void *cpu_addr = mmap(0, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
       if (cpu_addr == MAP_FAILED) {
@@ -1792,6 +1807,7 @@ llvmpipe_init_screen_resource_funcs(struct pipe_screen *screen)
    screen->resource_from_handle = llvmpipe_resource_from_handle;
    screen->resource_from_memobj = llvmpipe_resource_from_memobj;
    screen->resource_get_handle = llvmpipe_resource_get_handle;
+   screen->resource_get_address = llvmpipe_resource_get_address;
    screen->can_create_resource = llvmpipe_can_create_resource;
 
    screen->resource_create_unbacked = llvmpipe_resource_create_unbacked;

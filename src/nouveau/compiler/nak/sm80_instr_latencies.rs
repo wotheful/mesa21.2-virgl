@@ -173,9 +173,10 @@ impl RegLatencySM80 {
             Op::Prmt(_) => CoupledAlu,
             Op::Nop(_) => CoupledDisp64,
             Op::Vote(_) => CoupledAlu,
+            Op::Match(_) => Decoupled,
             Op::S2R(_) => Decoupled,
             // S2UR  => Decoupled,
-            Op::R2UR(_) => {
+            Op::R2UR(_) | Op::Redux(_) => {
                 if reader {
                     Decoupled
                 } else {
@@ -837,6 +838,7 @@ impl PredLatencySM80 {
             Op::Txq(_) => PredLatencySM80::Decoupled,
 
             Op::Vote(_) => PredLatencySM80::Disp_Alu,
+            Op::Match(_) => PredLatencySM80::Decoupled,
             _ => {
                 panic!("Illegal op in sm80 pred latency {}", op);
             }
@@ -1058,7 +1060,7 @@ impl URegLatencySM80 {
             Op::I2F(_) => vdecoupled,
             Op::F2I(_) => vdecoupled,
             Op::F2F(_) => vdecoupled,
-            Op::R2UR(_) => {
+            Op::R2UR(_) | Op::Redux(_) => {
                 if !reader {
                     ToUr
                 } else {

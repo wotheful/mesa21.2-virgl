@@ -34,6 +34,7 @@
 #include "pipe/p_defines.h"
 #include "pipe/p_state.h"
 #include "pipe/p_context.h"
+#include "draw/draw_context.h"
 #include "frontend/drisw_api.h"
 
 #include "util/u_inlines.h"
@@ -276,6 +277,7 @@ static const struct vk_device_extension_table lvp_device_extensions_supported = 
    .EXT_provoking_vertex                  = true,
    .EXT_line_rasterization                = true,
    .EXT_robustness2                       = true,
+   .EXT_zero_initialize_device_memory     = true,
    .AMDX_shader_enqueue                   = true,
 #if DETECT_OS_ANDROID
    .ANDROID_native_buffer                 = true,
@@ -617,6 +619,9 @@ lvp_get_features(const struct lvp_physical_device *pdevice,
 
       /* VK_EXT_multi_draw */
       .multiDraw = true,
+
+      /* VK_EXT_zero_initialize_device_memory */
+      .zeroInitializeDeviceMemory = true,
 
       /* VK_EXT_depth_clip_enable */
       .depthClipEnable = (pdevice->pscreen->caps.depth_clamp_enable != 0),
@@ -1396,10 +1401,6 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateInstance(
 
    //   VG(VALGRIND_CREATE_MEMPOOL(instance, 0, false));
 
-#if DETECT_OS_ANDROID
-   vk_android_init_ugralloc();
-#endif
-
    *pInstance = lvp_instance_to_handle(instance);
 
    return VK_SUCCESS;
@@ -1413,10 +1414,6 @@ VKAPI_ATTR void VKAPI_CALL lvp_DestroyInstance(
 
    if (!instance)
       return;
-
-#if DETECT_OS_ANDROID
-   vk_android_destroy_ugralloc();
-#endif
 
    pipe_loader_release(&instance->devs, instance->num_devices);
 
@@ -1455,6 +1452,9 @@ static struct drisw_loader_funcs lvp_sw_lf = {
 static VkResult
 lvp_enumerate_physical_devices(struct vk_instance *vk_instance)
 {
+   if (!draw_get_option_use_llvm())
+      return VK_SUCCESS;
+
    struct lvp_instance *instance =
       container_of(vk_instance, struct lvp_instance, vk);
 
@@ -1924,6 +1924,7 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_AllocateMemory(
    struct lvp_device_memory *mem;
    ASSERTED const VkExportMemoryAllocateInfo *export_info = NULL;
    ASSERTED const VkImportMemoryFdInfoKHR *import_info = NULL;
+   const VkMemoryAllocateFlagsInfo *mem_flags = NULL;
 #if DETECT_OS_ANDROID
    ASSERTED const VkImportAndroidHardwareBufferInfoANDROID *ahb_import_info = NULL;
 #endif
@@ -1957,6 +1958,9 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_AllocateMemory(
          priority = get_mem_priority(prio->priority);
          break;
       }
+      case VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO:
+         mem_flags = (void*)ext;
+         break;
 #if DETECT_OS_ANDROID
       case VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID: {
          ahb_import_info = (VkImportAndroidHardwareBufferInfoANDROID*)ext;
@@ -2044,6 +2048,9 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_AllocateMemory(
 
       mem->map = device->pscreen->map_memory(device->pscreen, mem->pmem);
       mem->memory_type = dmabuf ? LVP_DEVICE_MEMORY_TYPE_DMA_BUF : LVP_DEVICE_MEMORY_TYPE_OPAQUE_FD;
+      /* XXX: this should be memset_s or memset_explicit but they are not supported */
+      if (mem_flags && mem_flags->flags & VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT)
+         memset(mem->map, 0, pAllocateInfo->allocationSize);
    }
 #endif
    else {
@@ -2057,6 +2064,9 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_AllocateMemory(
          memset(mem->map, UINT8_MAX / 2 + 1, pAllocateInfo->allocationSize);
       }
       set_mem_priority(mem, priority);
+      /* XXX: this should be memset_s or memset_explicit but they are not supported */
+      if (mem_flags && mem_flags->flags & VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT)
+         memset(mem->map, 0, pAllocateInfo->allocationSize);
    }
 
    mem->type_index = pAllocateInfo->memoryTypeIndex;
@@ -2341,10 +2351,6 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_BindImageMemory2(VkDevice _device,
       VkBindMemoryStatusKHR *status = (void*)vk_find_struct_const(&pBindInfos[i], BIND_MEMORY_STATUS_KHR);
       bool did_bind = false;
 
-      if (!mem) {
-         continue;
-      }
-
 #ifdef LVP_USE_WSI_PLATFORM
       vk_foreach_struct_const(s, bind_info->pNext) {
          switch (s->sType) {
@@ -2374,6 +2380,10 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_BindImageMemory2(VkDevice _device,
 #endif
 
       if (!did_bind) {
+         if (!mem) {
+            continue;
+         }
+
          uint64_t offset_B = 0;
          VkResult result;
          if (image->disjoint) {

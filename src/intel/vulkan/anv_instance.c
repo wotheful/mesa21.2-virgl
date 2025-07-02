@@ -50,11 +50,12 @@ static const driOptionDescription anv_dri_options[] = {
 
    DRI_CONF_SECTION_DEBUG
       DRI_CONF_ALWAYS_FLUSH_CACHE(false)
+      DRI_CONF_VK_LOWER_TERMINATE_TO_DISCARD(false)
       DRI_CONF_VK_WSI_FORCE_BGRA8_UNORM_FIRST(false)
       DRI_CONF_VK_WSI_FORCE_SWAPCHAIN_TO_CURRENT_EXTENT(false)
       DRI_CONF_VK_X11_IGNORE_SUBOPTIMAL(false)
       DRI_CONF_LIMIT_TRIG_INPUT_RANGE(false)
-      DRI_CONF_ANV_MESH_CONV_PRIM_ATTRS_TO_VERT_ATTRS(-2)
+      DRI_CONF_ANV_EMULATE_READ_WITHOUT_FORMAT(false)
       DRI_CONF_FORCE_VK_VENDOR()
       DRI_CONF_FAKE_SPARSE(false)
       DRI_CONF_CUSTOM_BORDER_COLORS_WITHOUT_FORMAT(!DETECT_OS_ANDROID)
@@ -172,8 +173,8 @@ anv_init_dri_options(struct anv_instance *instance)
        driQueryOptionb(&instance->dri_options, "no_16bit");
     instance->intel_enable_wa_14018912822 =
        driQueryOptionb(&instance->dri_options, "intel_enable_wa_14018912822");
-    instance->mesh_conv_prim_attrs_to_vert_attrs =
-       driQueryOptioni(&instance->dri_options, "anv_mesh_conv_prim_attrs_to_vert_attrs");
+    instance->emulate_read_without_format =
+       driQueryOptionb(&instance->dri_options, "anv_emulate_read_without_format");
     instance->fp64_workaround_enabled =
        driQueryOptionb(&instance->dri_options, "fp64_workaround_enabled");
     instance->generated_indirect_threshold =
@@ -211,6 +212,8 @@ anv_init_dri_options(struct anv_instance *instance)
                        "custom_border_colors_without_format");
     instance->vf_component_packing =
        driQueryOptionb(&instance->dri_options, "anv_vf_component_packing");
+    instance->lower_terminate_to_discard =
+       driQueryOptionb(&instance->dri_options, "vk_lower_terminate_to_discard");
 
     instance->stack_ids = driQueryOptioni(&instance->dri_options, "intel_stack_id");
     switch (instance->stack_ids) {

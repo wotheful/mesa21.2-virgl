@@ -68,15 +68,6 @@ vc4_set_stencil_ref(struct pipe_context *pctx,
 }
 
 static void
-vc4_set_clip_state(struct pipe_context *pctx,
-                   const struct pipe_clip_state *clip)
-{
-        struct vc4_context *vc4 = vc4_context(pctx);
-        vc4->clip = *clip;
-        vc4->dirty |= VC4_DIRTY_CLIP;
-}
-
-static void
 vc4_set_sample_mask(struct pipe_context *pctx, unsigned sample_mask)
 {
         struct vc4_context *vc4 = vc4_context(pctx);
@@ -424,17 +415,17 @@ vc4_set_framebuffer_state(struct pipe_context *pctx,
          * framebuffer.  Note that if the z/color buffers were mismatched
          * sizes, we wouldn't be able to do this.
          */
-        if (cso->cbufs[0] && cso->cbufs[0]->u.tex.level) {
+        if (cso->cbufs[0].texture && cso->cbufs[0].level) {
                 struct vc4_resource *rsc =
-                        vc4_resource(cso->cbufs[0]->texture);
+                        vc4_resource(cso->cbufs[0].texture);
                 cso->width =
-                        (rsc->slices[cso->cbufs[0]->u.tex.level].stride /
+                        (rsc->slices[cso->cbufs[0].level].stride /
                          rsc->cpp);
-        } else if (cso->zsbuf && cso->zsbuf->u.tex.level){
+        } else if (cso->zsbuf.texture && cso->zsbuf.level){
                 struct vc4_resource *rsc =
-                        vc4_resource(cso->zsbuf->texture);
+                        vc4_resource(cso->zsbuf.texture);
                 cso->width =
-                        (rsc->slices[cso->zsbuf->u.tex.level].stride /
+                        (rsc->slices[cso->zsbuf.level].stride /
                          rsc->cpp);
         }
 
@@ -675,7 +666,6 @@ vc4_state_init(struct pipe_context *pctx)
 {
         pctx->set_blend_color = vc4_set_blend_color;
         pctx->set_stencil_ref = vc4_set_stencil_ref;
-        pctx->set_clip_state = vc4_set_clip_state;
         pctx->set_sample_mask = vc4_set_sample_mask;
         pctx->set_constant_buffer = vc4_set_constant_buffer;
         pctx->set_framebuffer_state = vc4_set_framebuffer_state;

@@ -921,7 +921,7 @@ agx_transfer_map(struct pipe_context *pctx, struct pipe_resource *resource,
     * compression in software. In some cases, we could use this path for
     * twiddled too, but we don't have a use case for that yet.
     */
-   bool staging_blit = ail_is_level_compressed(&rsrc->layout, level);
+   bool staging_blit = ail_is_level_logically_compressed(&rsrc->layout, level);
 
    agx_prepare_for_map(ctx, rsrc, level, usage, box, staging_blit);
 
@@ -1089,7 +1089,7 @@ agx_clear(struct pipe_context *pctx, unsigned buffers,
 
       /* Clear colour must be clamped to properly handle signed ints. */
       union pipe_color_union clamped =
-         util_clamp_color(batch->key.cbufs[rt]->format, color);
+         util_clamp_color(batch->key.cbufs[rt].format, color);
 
       batch->uploaded_clear_color[rt] = agx_pool_upload_aligned(
          &batch->pool, clamped.f, sizeof(clamped.f), 16);
@@ -1241,16 +1241,16 @@ agx_cmdbuf(struct agx_device *dev, struct drm_asahi_cmd_render *c,
    c->isp_bgobjvals = 0x300;
 
    struct agx_resource *zres = NULL, *sres = NULL;
-   struct pipe_surface *zsbuf = framebuffer->zsbuf;
+   struct pipe_surface *zsbuf = &framebuffer->zsbuf;
 
-   if (framebuffer->zsbuf) {
+   if (framebuffer->zsbuf.texture) {
       agx_pack(&c->isp_zls_pixels, CR_ISP_ZLS_PIXELS, cfg) {
          cfg.x = c->width_px;
          cfg.y = c->height_px;
       }
    }
 
-   if (zsbuf) {
+   if (zsbuf->texture) {
       struct agx_resource *zsres = agx_resource(zsbuf->texture);
       const struct util_format_description *desc =
          util_format_description(zsres->layout.format);
@@ -1268,8 +1268,8 @@ agx_cmdbuf(struct agx_device *dev, struct drm_asahi_cmd_render *c,
       if (zsres->separate_stencil)
          sres = zsres->separate_stencil;
 
-      unsigned level = zsbuf->u.tex.level;
-      unsigned first_layer = zsbuf->u.tex.first_layer;
+      unsigned level = zsbuf->level;
+      unsigned first_layer = zsbuf->first_layer;
 
       if (zres) {
          c->depth.base = agx_map_texture_gpu(zres, first_layer) +
@@ -1571,10 +1571,10 @@ agx_flush_render(struct agx_context *ctx, struct agx_batch *batch,
       agx_tilebuffer_spills(&batch->tilebuffer_layout);
 
    for (unsigned i = 0; i < batch->key.nr_cbufs; ++i) {
-      struct pipe_surface *surf = batch->key.cbufs[i];
+      const struct pipe_surface *surf = &batch->key.cbufs[i];
 
       clear_pipeline_textures |=
-         surf && surf->texture && !(batch->clear & (PIPE_CLEAR_COLOR0 << i));
+         surf->texture && !(batch->clear & (PIPE_CLEAR_COLOR0 << i));
    }
 
    /* Scissor and depth bias arrays are staged to dynamic arrays on the CPU. At
@@ -1694,13 +1694,13 @@ agx_invalidate_resource(struct pipe_context *pctx,
    struct agx_batch *batch = agx_get_batch(ctx);
 
    /* Handle the glInvalidateFramebuffer case */
-   if (batch->key.zsbuf && batch->key.zsbuf->texture == resource)
+   if (batch->key.zsbuf.texture == resource)
       batch->resolve &= ~PIPE_CLEAR_DEPTHSTENCIL;
 
    for (unsigned i = 0; i < batch->key.nr_cbufs; ++i) {
-      struct pipe_surface *surf = batch->key.cbufs[i];
+      const struct pipe_surface *surf = &batch->key.cbufs[i];
 
-      if (surf && surf->texture == resource)
+      if (surf->texture == resource)
          batch->resolve &= ~(PIPE_CLEAR_COLOR0 << i);
    }
 }
@@ -1898,6 +1898,7 @@ agx_init_shader_caps(struct pipe_screen *pscreen)
       /* This cap is broken, see 9a38dab2d18 ("zink: disable
        * pipe_shader_caps.fp16_const_buffers") */
       caps->fp16_const_buffers = false;
+      caps->glsl_16bit_load_dst = true;
 
       /* TODO: Enable when fully baked */
       if (strcmp(util_get_process_name(), "blender") == 0)

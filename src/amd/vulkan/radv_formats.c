@@ -399,9 +399,8 @@ radv_physical_device_get_format_properties(struct radv_physical_device *pdev, Vk
             tiled |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
          }
 
-         /* Don't support blitting/minmax for R32G32B32 formats. */
-         if (format == VK_FORMAT_R32G32B32_SFLOAT || format == VK_FORMAT_R32G32B32_UINT ||
-             format == VK_FORMAT_R32G32B32_SINT) {
+         /* Don't support blitting/minmax for 96-bit formats. */
+         if (vk_format_is_96bit(format)) {
             linear &= ~VK_FORMAT_FEATURE_2_BLIT_SRC_BIT;
             linear &= ~VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT;
          }
@@ -939,8 +938,7 @@ radv_get_image_format_properties(struct radv_physical_device *pdev, const VkPhys
       sampleCounts |= VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT | VK_SAMPLE_COUNT_8_BIT;
    }
 
-   if (tiling == VK_IMAGE_TILING_LINEAR && (format == VK_FORMAT_R32G32B32_SFLOAT ||
-                                            format == VK_FORMAT_R32G32B32_SINT || format == VK_FORMAT_R32G32B32_UINT)) {
+   if (tiling == VK_IMAGE_TILING_LINEAR && vk_format_is_96bit(format)) {
       /* R32G32B32 is a weird format and the driver currently only
        * supports the barely minimum.
        * TODO: Implement more if we really need to.
@@ -1236,7 +1234,7 @@ radv_GetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
    }
 
    if (ycbcr_props) {
-      ycbcr_props->combinedImageSamplerDescriptorCount = 1;
+      ycbcr_props->combinedImageSamplerDescriptorCount = vk_format_get_plane_count(format);
    }
 
    if (texture_lod_props) {
@@ -1251,9 +1249,8 @@ radv_GetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
       image_compression_props->imageCompressionFixedRateFlags = VK_IMAGE_COMPRESSION_FIXED_RATE_NONE_EXT;
 
       if (vk_format_is_depth_or_stencil(format)) {
-         image_compression_props->imageCompressionFlags = (instance->debug_flags & RADV_DEBUG_NO_HIZ)
-                                                             ? VK_IMAGE_COMPRESSION_DISABLED_EXT
-                                                             : VK_IMAGE_COMPRESSION_DEFAULT_EXT;
+         image_compression_props->imageCompressionFlags =
+            pdev->use_hiz ? VK_IMAGE_COMPRESSION_DEFAULT_EXT : VK_IMAGE_COMPRESSION_DISABLED_EXT;
       } else {
          image_compression_props->imageCompressionFlags =
             ((instance->debug_flags & RADV_DEBUG_NO_DCC) || pdev->info.gfx_level < GFX8)

@@ -15,7 +15,6 @@
 
 #include "nir_builder.h"
 
-#include "vk_common_entrypoints.h"
 #include "vk_device_generated_commands.h"
 #include "vk_shader_module.h"
 
@@ -206,7 +205,6 @@ radv_get_sequence_size_graphics(const struct radv_indirect_command_layout *layou
 {
    const struct radv_device *device = container_of(layout->vk.base.device, struct radv_device, vk);
    const struct radv_physical_device *pdev = radv_device_physical(device);
-   const struct radv_instance *instance = radv_physical_device_instance(pdev);
 
    const VkGeneratedCommandsPipelineInfoEXT *pipeline_info =
       vk_find_struct_const(pNext, GENERATED_COMMANDS_PIPELINE_INFO_EXT);
@@ -288,7 +286,7 @@ radv_get_sequence_size_graphics(const struct radv_indirect_command_layout *layou
       }
    }
 
-   if (pdev->info.gfx_level == GFX12 && !(instance->debug_flags & RADV_DEBUG_NO_HIZ)) {
+   if (pdev->info.gfx_level == GFX12 && pdev->use_hiz) {
       /* HiZ/HiS hw workaround */
       *cmd_size += 8 * 4;
    }
@@ -1141,9 +1139,8 @@ dgc_gfx12_emit_hiz_his_wa(struct dgc_cmdbuf *cs)
 {
    const struct radv_device *device = cs->dev;
    const struct radv_physical_device *pdev = radv_device_physical(device);
-   const struct radv_instance *instance = radv_physical_device_instance(pdev);
 
-   if (pdev->info.gfx_level == GFX12 && !(instance->debug_flags & RADV_DEBUG_NO_HIZ)) {
+   if (pdev->info.gfx_level == GFX12 && pdev->use_hiz) {
       dgc_cs_begin(cs);
       dgc_cs_emit_imm(PKT3(PKT3_RELEASE_MEM, 6, 0));
       dgc_cs_emit_imm(S_490_EVENT_TYPE(V_028A90_BOTTOM_OF_PIPE_TS) | S_490_EVENT_INDEX(5));
@@ -3105,11 +3102,19 @@ radv_prepare_dgc(struct radv_cmd_buffer *cmd_buffer, const VkGeneratedCommandsIn
 
    radv_CmdBindPipeline(radv_cmd_buffer_to_handle(cmd_buffer), VK_PIPELINE_BIND_POINT_COMPUTE, layout->pipeline);
 
-   vk_common_CmdPushConstants(radv_cmd_buffer_to_handle(cmd_buffer), layout->pipeline_layout,
-                              VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(params), &params);
+   const VkPushConstantsInfoKHR pc_info = {
+      .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
+      .layout = layout->pipeline_layout,
+      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+      .offset = 0,
+      .size = sizeof(params),
+      .pValues = &params,
+   };
+
+   radv_CmdPushConstants2(radv_cmd_buffer_to_handle(cmd_buffer), &pc_info);
 
    unsigned block_count = MAX2(1, DIV_ROUND_UP(pGeneratedCommandsInfo->maxSequenceCount, 64));
-   vk_common_CmdDispatch(radv_cmd_buffer_to_handle(cmd_buffer), block_count, 1, 1);
+   radv_CmdDispatchBase(radv_cmd_buffer_to_handle(cmd_buffer), 0, 0, 0, block_count, 1, 1);
 
    radv_meta_restore(&saved_state, cmd_buffer);
 }

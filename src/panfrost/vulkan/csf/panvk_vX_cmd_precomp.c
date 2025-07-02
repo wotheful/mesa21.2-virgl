@@ -32,7 +32,7 @@ panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
       panvk_per_arch(precomp_cache_get)(dev->precomp_cache, idx);
    assert(shader);
 
-   struct panfrost_ptr push_uniforms = panvk_cmd_alloc_dev_mem(
+   struct pan_ptr push_uniforms = panvk_cmd_alloc_dev_mem(
       cmdbuf, desc, BIFROST_PRECOMPILED_KERNEL_SYSVALS_SIZE + data_size, 16);
 
    assert(push_uniforms.gpu);
@@ -45,39 +45,6 @@ panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
 
    bifrost_precompiled_kernel_prepare_push_uniforms(push_uniforms.cpu, data,
                                                     data_size, &sysvals);
-
-   struct pan_tls_info tlsinfo = {.tls = {.size = shader->info.tls_size},
-                                  .wls = {.size = shader->info.wls_size}};
-
-   if (tlsinfo.tls.size) {
-      unsigned thread_tls_alloc =
-         panfrost_query_thread_tls_alloc(&phys_dev->kmod.props);
-      unsigned core_id_range;
-      panfrost_query_core_count(&phys_dev->kmod.props, &core_id_range);
-
-      unsigned size = panfrost_get_total_stack_size(
-         tlsinfo.tls.size, thread_tls_alloc, core_id_range);
-      tlsinfo.tls.ptr = panvk_cmd_alloc_dev_mem(cmdbuf, tls, size, 4096).gpu;
-      assert(tlsinfo.tls.ptr);
-   }
-
-   if (tlsinfo.wls.size) {
-      unsigned core_id_range;
-      panfrost_query_core_count(&phys_dev->kmod.props, &core_id_range);
-
-      struct pan_compute_dim wg_count = {.x = grid.count[0],
-                                         .y = grid.count[1],
-                                         .z = grid.count[2]};
-      tlsinfo.wls.instances = pan_wls_instances(&wg_count);
-
-      unsigned wls_total_size = pan_wls_adjust_size(tlsinfo.wls.size) *
-                                tlsinfo.wls.instances * core_id_range;
-
-      tlsinfo.wls.ptr =
-         panvk_cmd_alloc_dev_mem(cmdbuf, tls, wls_total_size, 4096).gpu;
-
-      assert(tlsinfo.wls.ptr);
-   }
 
    struct pan_compute_dim dim = {.x = grid.count[0],
                                  .y = grid.count[1],
@@ -137,7 +104,9 @@ panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
       cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Z), grid.count[2]);
    }
 
-   panvk_per_arch(cs_pick_iter_sb)(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
+   struct cs_index next_iter_sb_scratch = cs_scratch_reg_tuple(b, 0, 2);
+   panvk_per_arch(cs_next_iter_sb)(cmdbuf, PANVK_SUBQUEUE_COMPUTE,
+                                   next_iter_sb_scratch);
 
    unsigned task_axis = MALI_TASK_AXIS_X;
    unsigned task_increment = 0;
@@ -147,6 +116,18 @@ panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
                         task_increment, task_axis,
                         cs_shader_res_sel(0, 0, 0, 0));
 
+#if PAN_ARCH >= 11
+   struct cs_index sync_addr = cs_scratch_reg64(b, 0);
+   struct cs_index add_val = cs_scratch_reg64(b, 2);
+
+   cs_load64_to(b, sync_addr, cs_subqueue_ctx_reg(b),
+                offsetof(struct panvk_cs_subqueue_context, syncobjs));
+   cs_add64(b, sync_addr, sync_addr,
+            PANVK_SUBQUEUE_COMPUTE * sizeof(struct panvk_cs_sync64));
+   cs_move64_to(b, add_val, 1);
+   cs_sync64_add(b, true, MALI_CS_SYNC_SCOPE_CSG, add_val, sync_addr,
+                 cs_defer_indirect());
+#else
    struct cs_index sync_addr = cs_scratch_reg64(b, 0);
    struct cs_index iter_sb = cs_scratch_reg32(b, 2);
    struct cs_index cmp_scratch = cs_scratch_reg32(b, 3);
@@ -162,10 +143,9 @@ panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
 
    cs_match(b, iter_sb, cmp_scratch) {
 #define CASE(x)                                                                \
-   cs_case(b, x) {                                                             \
+   cs_case(b, SB_ITER(x)) {                                                    \
       cs_sync64_add(b, true, MALI_CS_SYNC_SCOPE_CSG, add_val, sync_addr,       \
                     cs_defer(SB_WAIT_ITER(x), SB_ID(DEFERRED_SYNC)));          \
-      cs_move32_to(b, iter_sb, next_iter_sb(x));                               \
    }
 
       CASE(0)
@@ -175,10 +155,7 @@ panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
       CASE(4)
 #undef CASE
    }
-
-   cs_store32(b, iter_sb, cs_subqueue_ctx_reg(b),
-              offsetof(struct panvk_cs_subqueue_context, iter_sb));
-   cs_flush_stores(b);
+#endif
 
    ++cmdbuf->state.cs[PANVK_SUBQUEUE_COMPUTE].relative_sync_point;
 

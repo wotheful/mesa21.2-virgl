@@ -44,7 +44,7 @@ prepare_driver_set(struct panvk_cmd_buffer *cmdbuf)
       &cmdbuf->state.compute.desc_state;
    const struct panvk_shader *cs = cmdbuf->state.compute.shader;
    uint32_t desc_count = cs->desc_info.dyn_bufs.count + 1;
-   struct panfrost_ptr driver_set = panvk_cmd_alloc_dev_mem(
+   struct pan_ptr driver_set = panvk_cmd_alloc_dev_mem(
       cmdbuf, desc, desc_count * PANVK_DESCRIPTOR_SIZE, PANVK_DESCRIPTOR_SIZE);
    struct panvk_opaque_desc *descs = driver_set.cpu;
 
@@ -65,27 +65,6 @@ prepare_driver_set(struct panvk_cmd_buffer *cmdbuf)
    return VK_SUCCESS;
 }
 
-static unsigned
-calculate_workgroups_per_task(const struct panvk_shader *shader,
-                              struct panvk_physical_device *phys_dev)
-{
-   /* Each shader core can run N tasks and a total of M threads at any single
-    * time, thus each task should ideally have no more than M/N threads. */
-   unsigned max_threads_per_task = phys_dev->kmod.props.max_threads_per_core /
-                                   phys_dev->kmod.props.max_tasks_per_core;
-
-   /* To achieve the best utilization, we should aim for as many workgroups
-    * per tasks as we can fit without exceeding the above thread limit */
-   unsigned threads_per_wg = shader->cs.local_size.x * shader->cs.local_size.y *
-                             shader->cs.local_size.z;
-   assert(threads_per_wg > 0 &&
-          threads_per_wg <= phys_dev->kmod.props.max_threads_per_wg);
-   unsigned wg_per_task = DIV_ROUND_UP(max_threads_per_task, threads_per_wg);
-   assert(wg_per_task > 0 && wg_per_task <= max_threads_per_task);
-
-   return wg_per_task;
-}
-
 uint64_t
 panvk_per_arch(cmd_dispatch_prepare_tls)(struct panvk_cmd_buffer *cmdbuf,
                                          const struct panvk_shader *shader,
@@ -95,7 +74,7 @@ panvk_per_arch(cmd_dispatch_prepare_tls)(struct panvk_cmd_buffer *cmdbuf,
    struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(cmdbuf->vk.base.device->physical);
 
-   struct panfrost_ptr tsd = panvk_cmd_alloc_desc(cmdbuf, LOCAL_STORAGE);
+   struct pan_ptr tsd = panvk_cmd_alloc_desc(cmdbuf, LOCAL_STORAGE);
    if (!tsd.gpu)
       return tsd.gpu;
 
@@ -103,35 +82,16 @@ panvk_per_arch(cmd_dispatch_prepare_tls)(struct panvk_cmd_buffer *cmdbuf,
       .tls.size = shader->info.tls_size,
       .wls.size = shader->info.wls_size,
    };
-   unsigned core_id_range;
-   unsigned core_count =
-      panfrost_query_core_count(&phys_dev->kmod.props, &core_id_range);
-
-   /* Only used for indirect dispatch */
-   unsigned wg_per_task = 0;
-   if (indirect)
-      wg_per_task = calculate_workgroups_per_task(shader, phys_dev);
 
    if (tlsinfo.wls.size) {
-      /* NOTE: If the instance count is lower than the number of workgroups
-       * being dispatched, the HW will hold back workgroups until instances
-       * can be reused. */
-      /* NOTE: There is no benefit from allocating more instances than what
-       * can concurrently be used by the HW */
-      if (indirect) {
-         /* Assume we utilize all shader cores to the max */
-         tlsinfo.wls.instances = util_next_power_of_two(
-            wg_per_task * phys_dev->kmod.props.max_tasks_per_core * core_count);
-      } else {
-         /* TODO: Similar to what we are doing for indirect this should change
-          * to calculate the maximum number of workgroups we can execute
-          * concurrently. */
-         tlsinfo.wls.instances = pan_wls_instances(dim);
-      }
+      unsigned core_id_range;
+      pan_query_core_count(&phys_dev->kmod.props, &core_id_range);
 
-      /* TODO: Clamp WLS instance to some maximum WLS budget. */
-      unsigned wls_total_size = pan_wls_adjust_size(tlsinfo.wls.size) *
-                                tlsinfo.wls.instances * core_id_range;
+      tlsinfo.wls.instances = pan_calc_wls_instances(
+         &shader->cs.local_size, &phys_dev->kmod.props, indirect ? NULL : dim);
+
+      unsigned wls_total_size = pan_calc_total_wls_size(
+         tlsinfo.wls.size, tlsinfo.wls.instances, core_id_range);
 
       /* TODO: Reuse WLS allocation for all dispatch commands in the command
        * buffer, similar to what we do for TLS in draw. As WLS size (and
@@ -192,7 +152,8 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf, struct panvk_dispatch_info *info)
    /* Only used for indirect dispatch */
    unsigned wg_per_task = 0;
    if (indirect)
-      wg_per_task = calculate_workgroups_per_task(shader, phys_dev);
+      wg_per_task = pan_calc_workgroups_per_task(&shader->cs.local_size,
+                                                 &phys_dev->kmod.props);
 
    if (compute_state_dirty(cmdbuf, DESC_STATE) ||
        compute_state_dirty(cmdbuf, CS)) {
@@ -311,7 +272,9 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf, struct panvk_dispatch_info *info)
       }
    }
 
-   panvk_per_arch(cs_pick_iter_sb)(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
+   struct cs_index next_iter_sb_scratch = cs_scratch_reg_tuple(b, 0, 2);
+   panvk_per_arch(cs_next_iter_sb)(cmdbuf, PANVK_SUBQUEUE_COMPUTE,
+                                   next_iter_sb_scratch);
 
    if (indirect) {
       /* Use run_compute with a set task axis instead of run_compute_indirect as
@@ -335,6 +298,19 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf, struct panvk_dispatch_info *info)
                            cs_shader_res_sel(0, 0, 0, 0));
    }
 
+#if PAN_ARCH >= 11
+   struct cs_index sync_addr = cs_scratch_reg64(b, 0);
+   struct cs_index add_val = cs_scratch_reg64(b, 2);
+
+   cs_load64_to(b, sync_addr, cs_subqueue_ctx_reg(b),
+                offsetof(struct panvk_cs_subqueue_context, syncobjs));
+
+   cs_add64(b, sync_addr, sync_addr,
+            PANVK_SUBQUEUE_COMPUTE * sizeof(struct panvk_cs_sync64));
+   cs_move64_to(b, add_val, 1);
+   cs_sync64_add(b, true, MALI_CS_SYNC_SCOPE_CSG, add_val, sync_addr,
+                 cs_defer_indirect());
+#else
    struct cs_index sync_addr = cs_scratch_reg64(b, 0);
    struct cs_index iter_sb = cs_scratch_reg32(b, 2);
    struct cs_index cmp_scratch = cs_scratch_reg32(b, 3);
@@ -350,10 +326,9 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf, struct panvk_dispatch_info *info)
 
    cs_match(b, iter_sb, cmp_scratch) {
 #define CASE(x)                                                                \
-   cs_case(b, x) {                                                             \
+   cs_case(b, SB_ITER(x)) {                                                    \
       cs_sync64_add(b, true, MALI_CS_SYNC_SCOPE_CSG, add_val, sync_addr,       \
                     cs_defer(SB_WAIT_ITER(x), SB_ID(DEFERRED_SYNC)));          \
-      cs_move32_to(b, iter_sb, next_iter_sb(x));                               \
    }
 
       CASE(0)
@@ -363,10 +338,7 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf, struct panvk_dispatch_info *info)
       CASE(4)
 #undef CASE
    }
-
-   cs_store32(b, iter_sb, cs_subqueue_ctx_reg(b),
-              offsetof(struct panvk_cs_subqueue_context, iter_sb));
-   cs_flush_stores(b);
+#endif
 
    ++cmdbuf->state.cs[PANVK_SUBQUEUE_COMPUTE].relative_sync_point;
    clear_dirty_after_dispatch(cmdbuf);

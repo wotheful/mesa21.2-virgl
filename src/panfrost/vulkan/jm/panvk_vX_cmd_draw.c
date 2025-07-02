@@ -63,14 +63,14 @@ struct panvk_draw_data {
    const struct pan_tiler_context *tiler_ctx;
    uint64_t viewport;
    struct {
-      struct panfrost_ptr vertex_copy_desc;
-      struct panfrost_ptr frag_copy_desc;
+      struct pan_ptr vertex_copy_desc;
+      struct pan_ptr frag_copy_desc;
       union {
          struct {
-            struct panfrost_ptr vertex;
-            struct panfrost_ptr tiler;
+            struct pan_ptr vertex;
+            struct pan_ptr tiler;
          };
-         struct panfrost_ptr idvs;
+         struct pan_ptr idvs;
       };
    } jobs;
 };
@@ -246,7 +246,7 @@ panvk_draw_prepare_fs_rsd(struct panvk_cmd_buffer *cmdbuf,
       msaa = false;
    }
 
-   struct panfrost_ptr ptr = panvk_cmd_alloc_desc_aggregate(
+   struct pan_ptr ptr = panvk_cmd_alloc_desc_aggregate(
       cmdbuf, PAN_DESC(RENDERER_STATE), PAN_DESC_ARRAY(bd_count, BLEND));
    if (!ptr.gpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -404,19 +404,19 @@ panvk_varying_hw_format(gl_shader_stage stage, gl_varying_slot loc,
    case VARYING_SLOT_PNTC:
    case VARYING_SLOT_PSIZ:
 #if PAN_ARCH <= 6
-      return (MALI_R16F << 12) | panfrost_get_default_swizzle(1);
+      return (MALI_R16F << 12) | pan_get_default_swizzle(1);
 #else
       return (MALI_R16F << 12) | MALI_RGB_COMPONENT_ORDER_R000;
 #endif
    case VARYING_SLOT_POS:
 #if PAN_ARCH <= 6
-      return (MALI_SNAP_4 << 12) | panfrost_get_default_swizzle(4);
+      return (MALI_SNAP_4 << 12) | pan_get_default_swizzle(4);
 #else
       return (MALI_SNAP_4 << 12) | MALI_RGB_COMPONENT_ORDER_RGBA;
 #endif
    default:
       if (pfmt != PIPE_FORMAT_NONE)
-         return GENX(panfrost_format_from_pipe_format)(pfmt)->hw;
+         return GENX(pan_format_from_pipe_format)(pfmt)->hw;
 
 #if PAN_ARCH >= 7
       return (MALI_CONSTANT << 12) | MALI_RGB_COMPONENT_ORDER_0000;
@@ -432,7 +432,7 @@ panvk_draw_prepare_varyings(struct panvk_cmd_buffer *cmdbuf,
 {
    const struct panvk_shader *vs = cmdbuf->state.gfx.vs.shader;
    const struct panvk_shader_link *link = &cmdbuf->state.gfx.link;
-   struct panfrost_ptr bufs = panvk_cmd_alloc_desc_array(
+   struct pan_ptr bufs = panvk_cmd_alloc_desc_array(
       cmdbuf, PANVK_VARY_BUF_MAX + 1, ATTRIBUTE_BUFFER);
    if (!bufs.gpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -535,8 +535,8 @@ panvk_draw_emit_attrib_buf(const struct panvk_draw_data *draw,
       }
    } else {
       unsigned divisor_r = 0, divisor_e = 0;
-      unsigned divisor_num =
-         panfrost_compute_magic_divisor(divisor, &divisor_r, &divisor_e);
+      unsigned divisor_d =
+         pan_compute_npot_divisor(divisor, &divisor_r, &divisor_e);
       pan_pack(desc, ATTRIBUTE_BUFFER, cfg) {
          cfg.type = MALI_ATTRIBUTE_TYPE_1D_NPOT_DIVISOR;
          cfg.stride = stride;
@@ -547,7 +547,7 @@ panvk_draw_emit_attrib_buf(const struct panvk_draw_data *draw,
       }
 
       pan_cast_and_pack(buf_ext, ATTRIBUTE_BUFFER_CONTINUATION_NPOT, cfg) {
-         cfg.divisor_numerator = divisor_num;
+         cfg.divisor_numerator = divisor_d;
          cfg.divisor = buf_info->divisor;
       }
 
@@ -578,7 +578,7 @@ panvk_draw_emit_attrib(const struct panvk_draw_data *draw,
       if (per_instance)
          cfg.offset += draw->info.instance.base * buf_info->stride;
 
-      cfg.format = GENX(panfrost_format_from_pipe_format)(f)->hw;
+      cfg.format = GENX(pan_format_from_pipe_format)(f)->hw;
    }
 }
 
@@ -606,10 +606,10 @@ panvk_draw_prepare_vs_attribs(struct panvk_cmd_buffer *cmdbuf,
       return VK_SUCCESS;
 
    unsigned attrib_buf_count = (num_vbs + num_imgs) * 2;
-   struct panfrost_ptr bufs = panvk_cmd_alloc_desc_array(
+   struct pan_ptr bufs = panvk_cmd_alloc_desc_array(
       cmdbuf, attrib_buf_count + 1, ATTRIBUTE_BUFFER);
    struct mali_attribute_buffer_packed *attrib_buf_descs = bufs.cpu;
-   struct panfrost_ptr attribs =
+   struct pan_ptr attribs =
       panvk_cmd_alloc_desc_array(cmdbuf, attrib_count, ATTRIBUTE);
    struct mali_attribute_packed *attrib_descs = attribs.cpu;
 
@@ -673,11 +673,11 @@ panvk_emit_viewport(struct panvk_cmd_buffer *cmdbuf,
    if (vp->viewport_count < 1)
       return;
 
-   struct panvk_graphics_sysvals *sysvals = &cmdbuf->state.gfx.sysvals;
    const VkViewport *viewport = &vp->viewports[0];
    const VkRect2D *scissor = &vp->scissors[0];
-   float minz = sysvals->viewport.offset.z;
-   float maxz = minz + sysvals->viewport.scale.z;
+   float minz, maxz;
+   panvk_depth_range(&cmdbuf->state.gfx, &cmdbuf->vk.dynamic_graphics_state.vp,
+                     &minz, &maxz);
 
    /* The spec says "width must be greater than 0.0" */
    assert(viewport->width >= 0);
@@ -709,8 +709,8 @@ panvk_emit_viewport(struct panvk_cmd_buffer *cmdbuf,
       cfg.scissor_minimum_y = miny;
       cfg.scissor_maximum_x = maxx;
       cfg.scissor_maximum_y = maxy;
-      cfg.minimum_z = MIN2(minz, maxz);
-      cfg.maximum_z = MAX2(minz, maxz);
+      cfg.minimum_z = minz;
+      cfg.maximum_z = maxz;
    }
 }
 
@@ -723,10 +723,11 @@ panvk_draw_prepare_viewport(struct panvk_cmd_buffer *cmdbuf,
     * As a result, we define an empty one.
     */
    if (!cmdbuf->state.gfx.vpd || dyn_gfx_state_dirty(cmdbuf, VP_VIEWPORTS) ||
+       dyn_gfx_state_dirty(cmdbuf, VP_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE) ||
        dyn_gfx_state_dirty(cmdbuf, VP_SCISSORS) ||
        dyn_gfx_state_dirty(cmdbuf, RS_DEPTH_CLIP_ENABLE) ||
        dyn_gfx_state_dirty(cmdbuf, RS_DEPTH_CLAMP_ENABLE)) {
-      struct panfrost_ptr vp = panvk_cmd_alloc_desc(cmdbuf, VIEWPORT);
+      struct pan_ptr vp = panvk_cmd_alloc_desc(cmdbuf, VIEWPORT);
       if (!vp.gpu)
          return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
@@ -769,7 +770,7 @@ panvk_draw_prepare_vertex_job(struct panvk_cmd_buffer *cmdbuf,
                               struct panvk_draw_data *draw)
 {
    struct panvk_batch *batch = cmdbuf->cur_batch;
-   struct panfrost_ptr ptr = panvk_cmd_alloc_desc(cmdbuf, COMPUTE_JOB);
+   struct pan_ptr ptr = panvk_cmd_alloc_desc(cmdbuf, COMPUTE_JOB);
    if (!ptr.gpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
@@ -835,15 +836,17 @@ panvk_emit_tiler_primitive(struct panvk_cmd_buffer *cmdbuf,
       vs->info.vs.writes_point_size &&
       ia->primitive_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
    bool secondary_shader = vs->info.vs.secondary_enable && fs != NULL;
+   bool fs_reads_primitive_id = fs ? fs->info.fs.reads_primitive_id : false;
 
    pan_pack(prim, PRIMITIVE, cfg) {
       cfg.draw_mode = translate_prim_topology(ia->primitive_topology);
       if (writes_point_size)
          cfg.point_size_array_format = MALI_POINT_SIZE_ARRAY_FORMAT_FP16;
+      cfg.primitive_index_enable = fs_reads_primitive_id;
+      cfg.primitive_index_writeback = fs_reads_primitive_id;
 
       cfg.first_provoking_vertex =
-         cmdbuf->vk.dynamic_graphics_state.rs.provoking_vertex ==
-            VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT;
+         cmdbuf->state.gfx.render.first_provoking_vertex != U_TRISTATE_NO;
 
       if (ia->primitive_restart_enable)
          cfg.primitive_restart = MALI_PRIMITIVE_RESTART_IMPLICIT;
@@ -853,7 +856,7 @@ panvk_emit_tiler_primitive(struct panvk_cmd_buffer *cmdbuf,
          cfg.index_count = draw->info.vertex.count;
          cfg.indices = draw->indices;
          cfg.base_vertex_offset =
-            draw->info.vertex.base - draw->info.vertex.raw_offset;
+            (int64_t)draw->info.vertex.base - draw->info.vertex.raw_offset;
 
          switch (draw->info.index.size) {
          case 4:
@@ -901,6 +904,24 @@ panvk_emit_tiler_primitive_size(struct panvk_cmd_buffer *cmdbuf,
    }
 }
 
+static uint32_t
+primitive_vertex_count(enum mali_draw_mode in)
+{
+   switch (in) {
+   case MALI_DRAW_MODE_POINTS:
+      return 1;
+   case MALI_DRAW_MODE_LINES:
+   case MALI_DRAW_MODE_LINE_STRIP:
+      return 2;
+   case MALI_DRAW_MODE_TRIANGLES:
+   case MALI_DRAW_MODE_TRIANGLE_STRIP:
+   case MALI_DRAW_MODE_TRIANGLE_FAN:
+      return 3;
+   default:
+      unreachable("Invalid draw mode");
+   }
+}
+
 static void
 panvk_emit_tiler_dcd(struct panvk_cmd_buffer *cmdbuf,
                      const struct panvk_draw_data *draw,
@@ -937,6 +958,14 @@ panvk_emit_tiler_dcd(struct panvk_cmd_buffer *cmdbuf,
       cfg.offset_start = draw->info.vertex.raw_offset;
       cfg.instance_size =
          draw->info.instance.count > 1 ? draw->padded_vertex_count : 1;
+      uint32_t primitives_per_instance =
+         DIV_ROUND_UP(draw->padded_vertex_count,
+                      primitive_vertex_count(
+                         translate_prim_topology(ia->primitive_topology)));
+      /* instance_primitive_size has the same restrictions as
+       * padded_vertex_count, so we can use pan_padded_vertex_count here. */
+      cfg.instance_primitive_size =
+         pan_padded_vertex_count(primitives_per_instance);
       cfg.uniform_buffers = fs_desc_state->tables[PANVK_BIFROST_DESC_TABLE_UBO];
       cfg.push_uniforms = cmdbuf->state.gfx.fs.push_uniforms;
       cfg.textures = fs_desc_state->tables[PANVK_BIFROST_DESC_TABLE_TEXTURE];
@@ -948,21 +977,30 @@ panvk_emit_tiler_dcd(struct panvk_cmd_buffer *cmdbuf,
 }
 
 static void
-set_provoking_vertex_mode(struct panvk_cmd_buffer *cmdbuf)
+set_provoking_vertex_mode(struct panvk_cmd_buffer *cmdbuf,
+                          enum u_tristate first_provoking_vertex)
 {
-   struct pan_fb_info *fbinfo = &cmdbuf->state.gfx.render.fb.info;
-   bool first_provoking_vertex =
-      cmdbuf->vk.dynamic_graphics_state.rs.provoking_vertex ==
-         VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT;
+   struct panvk_cmd_graphics_state *state = &cmdbuf->state.gfx;
 
-   /* If this is not the first draw, first_provoking_vertex should match
-    * the one from the previous draws. Unfortunately, we can't check it
-    * when the render pass is inherited. */
-   assert(!cmdbuf->cur_batch->fb.desc.gpu ||
-          fbinfo->first_provoking_vertex == first_provoking_vertex);
+   if (first_provoking_vertex != U_TRISTATE_UNSET) {
+      /* If this is not the first draw, first_provoking_vertex should match
+       * the one from the previous draws. Unfortunately, we can't check it
+       * when the render pass is inherited. */
+      assert(state->render.first_provoking_vertex == U_TRISTATE_UNSET ||
+             state->render.first_provoking_vertex == first_provoking_vertex);
+      state->render.first_provoking_vertex = first_provoking_vertex;
+   }
 
-   fbinfo->first_provoking_vertex = first_provoking_vertex;
+   /* Once we emit the first FBDs/TDs, we need to commit to a state. If we
+    * choose the wrong one, we will fail the assert when the next application
+    * draw happens (with a different state). Use PROVOKING_VERTEX_MODE_FIRST
+    * because it's the vulkan default, and so likely to be right more often.
+    *
+    * TODO: handle this case better */
+   if (state->render.first_provoking_vertex == U_TRISTATE_UNSET)
+      state->render.first_provoking_vertex = U_TRISTATE_YES;
 }
+
 
 static VkResult
 panvk_draw_prepare_tiler_job(struct panvk_cmd_buffer *cmdbuf,
@@ -971,7 +1009,7 @@ panvk_draw_prepare_tiler_job(struct panvk_cmd_buffer *cmdbuf,
    struct panvk_batch *batch = cmdbuf->cur_batch;
    const struct panvk_shader *fs = cmdbuf->state.gfx.fs.shader;
    struct panvk_shader_desc_state *fs_desc_state = &cmdbuf->state.gfx.fs.desc;
-   struct panfrost_ptr ptr;
+   struct pan_ptr ptr;
    VkResult result = panvk_per_arch(meta_get_copy_desc_job)(
       cmdbuf, fs, &cmdbuf->state.gfx.desc_state, fs_desc_state, 0, &ptr);
 
@@ -1015,7 +1053,7 @@ panvk_draw_prepare_idvs_job(struct panvk_cmd_buffer *cmdbuf,
                             struct panvk_draw_data *draw)
 {
    struct panvk_batch *batch = cmdbuf->cur_batch;
-   struct panfrost_ptr ptr = panvk_cmd_alloc_desc(cmdbuf, INDEXED_VERTEX_JOB);
+   struct pan_ptr ptr = panvk_cmd_alloc_desc(cmdbuf, INDEXED_VERTEX_JOB);
    if (!ptr.gpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
@@ -1060,7 +1098,7 @@ panvk_draw_prepare_vs_copy_desc_job(struct panvk_cmd_buffer *cmdbuf,
    const struct vk_vertex_input_state *vi =
       cmdbuf->vk.dynamic_graphics_state.vi;
    unsigned num_vbs = util_last_bit(vi->bindings_valid);
-   struct panfrost_ptr ptr;
+   struct pan_ptr ptr;
    VkResult result = panvk_per_arch(meta_get_copy_desc_job)(
       cmdbuf, vs, &cmdbuf->state.gfx.desc_state, vs_desc_state,
       num_vbs * pan_size(ATTRIBUTE_BUFFER) * 2, &ptr);
@@ -1081,7 +1119,7 @@ panvk_draw_prepare_fs_copy_desc_job(struct panvk_cmd_buffer *cmdbuf,
    const struct panvk_shader *fs = cmdbuf->state.gfx.fs.shader;
    struct panvk_shader_desc_state *fs_desc_state = &cmdbuf->state.gfx.fs.desc;
    struct panvk_batch *batch = cmdbuf->cur_batch;
-   struct panfrost_ptr ptr;
+   struct pan_ptr ptr;
    VkResult result = panvk_per_arch(meta_get_copy_desc_job)(
       cmdbuf, fs, &cmdbuf->state.gfx.desc_state, fs_desc_state, 0, &ptr);
 
@@ -1182,7 +1220,16 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_data *draw)
       cmdbuf->state.gfx.occlusion_query.mode != MALI_OCCLUSION_MODE_DISABLED;
    bool needs_tiling = !rs->rasterizer_discard_enable || active_occlusion;
 
-   set_provoking_vertex_mode(cmdbuf);
+   if (cmdbuf->state.gfx.vk_meta) {
+      /* vk_meta doesn't care about the provoking vertex mode, we should use
+       * the same mode that the application uses. */
+      set_provoking_vertex_mode(cmdbuf, U_TRISTATE_UNSET);
+   } else {
+      enum u_tristate first_provoking_vertex = u_tristate_make(
+         cmdbuf->vk.dynamic_graphics_state.rs.provoking_vertex ==
+         VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT);
+      set_provoking_vertex_mode(cmdbuf, first_provoking_vertex);
+   }
 
    if (!rs->rasterizer_discard_enable) {
       const struct pan_fb_info *fbinfo = &cmdbuf->state.gfx.render.fb.info;
@@ -1273,9 +1320,9 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_data *draw)
    draw->tls = batch->tls.gpu;
    draw->fb = batch->fb.desc.gpu;
 
-   panfrost_pack_work_groups_compute(&draw->invocation, 1, draw->vertex_range,
-                                     draw->info.instance.count, 1, 1, 1, true,
-                                     false);
+   pan_pack_work_groups_compute(&draw->invocation, 1, draw->vertex_range,
+                                draw->info.instance.count, 1, 1, 1, true,
+                                false);
 
    result = panvk_draw_prepare_fs_rsd(cmdbuf, draw);
    if (result != VK_SUCCESS)
@@ -1386,7 +1433,7 @@ padded_vertex_count(struct panvk_cmd_buffer *cmdbuf, uint32_t vertex_count,
    if (idvs)
       vertex_count = ALIGN_POT(vertex_count, 4);
 
-   return panfrost_padded_vertex_count(vertex_count);
+   return pan_padded_vertex_count(vertex_count);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -1441,7 +1488,7 @@ panvk_index_minmax_search(struct panvk_cmd_buffer *cmdbuf, uint32_t start,
 
    *max = 0;
 
-   /* TODO: Use panfrost_minmax_cache */
+   /* TODO: Use pan_minmax_cache */
    /* TODO: Read full cacheline of data to mitigate the uncached
     * mapping slowness.
     */

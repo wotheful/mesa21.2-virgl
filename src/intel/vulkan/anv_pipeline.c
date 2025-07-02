@@ -76,6 +76,9 @@ anv_shader_stage_to_nir(struct anv_device *device,
 
       .min_ubo_alignment = ANV_UBO_ALIGNMENT,
       .min_ssbo_alignment = ANV_SSBO_ALIGNMENT,
+      .workarounds = {
+         .lower_terminate_to_discard = pdevice->instance->lower_terminate_to_discard,
+      },
    };
 
    nir_shader *nir;
@@ -87,12 +90,15 @@ anv_shader_stage_to_nir(struct anv_device *device,
       return NULL;
 
    if (INTEL_DEBUG(intel_debug_flag_for_shader_stage(stage))) {
-      fprintf(stderr, "NIR (from SPIR-V) for %s shader:\n",
-              gl_shader_stage_name(stage));
-      nir_print_shader(nir, stderr);
+      /* src_hash is unknown at the point */
+      if (!intel_shader_dump_filter) {
+         fprintf(stderr, "NIR (from SPIR-V) for %s shader:\n",
+                 gl_shader_stage_name(stage));
+         nir_print_shader(nir, stderr);
+      }
    }
 
-   NIR_PASS_V(nir, nir_lower_io_to_temporaries,
+   NIR_PASS_V(nir, nir_lower_io_vars_to_temporaries,
               nir_shader_get_entrypoint(nir), true, false);
 
    return nir;
@@ -467,6 +473,7 @@ populate_wm_prog_key(struct anv_pipeline_stage *stage,
                      const struct anv_graphics_base_pipeline *pipeline,
                      const BITSET_WORD *dynamic,
                      const struct vk_multisample_state *ms,
+                     const struct vk_rasterization_state *rs,
                      const struct vk_fragment_shading_rate_state *fsr,
                      const struct vk_render_pass_state *rp,
                      const enum intel_sometimes is_mesh,
@@ -540,6 +547,23 @@ populate_wm_prog_key(struct anv_pipeline_stage *stage,
       key->alpha_to_coverage = INTEL_SOMETIMES;
       key->multisample_fbo = INTEL_SOMETIMES;
       key->persample_interp = INTEL_SOMETIMES;
+   }
+
+   if (device->info->verx10 >= 200) {
+      if (rs != NULL) {
+         key->provoking_vertex_last =
+            BITSET_TEST(dynamic, MESA_VK_DYNAMIC_RS_PROVOKING_VERTEX) ?
+            INTEL_SOMETIMES :
+            rs->provoking_vertex == VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT ?
+            INTEL_ALWAYS : INTEL_NEVER;
+      } else {
+         key->provoking_vertex_last = INTEL_SOMETIMES;
+      }
+   } else {
+      /* Pre-Xe2 we don't care about this at all, make sure it's always set to
+       * NEVER to avoid it influencing the push constant.
+       */
+      key->provoking_vertex_last = INTEL_NEVER;
    }
 
    key->mesh_input = is_mesh;
@@ -622,11 +646,19 @@ anv_pipeline_hash_common(struct mesa_sha1 *ctx,
    const bool indirect_descriptors = device->physical->indirect_descriptors;
    _mesa_sha1_update(ctx, &indirect_descriptors, sizeof(indirect_descriptors));
 
+   const bool lower_terminate_to_discard =
+      device->physical->instance->lower_terminate_to_discard;
+   _mesa_sha1_update(ctx, &lower_terminate_to_discard,
+                     sizeof(lower_terminate_to_discard));
+
    const bool rba = device->robust_buffer_access;
    _mesa_sha1_update(ctx, &rba, sizeof(rba));
 
    const int spilling_rate = device->physical->compiler->spilling_rate;
    _mesa_sha1_update(ctx, &spilling_rate, sizeof(spilling_rate));
+
+   const bool erwf = device->physical->instance->emulate_read_without_format;
+   _mesa_sha1_update(ctx, &erwf, sizeof(erwf));
 }
 
 static void
@@ -987,30 +1019,37 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
-   /* Ensure robustness, do this before brw_nir_lower_storage_image so that
-    * added image size intrinsics for bounds checkings are properly lowered
-    * for cube images.
-    */
-   NIR_PASS(_, nir, nir_lower_robust_access,
-            accept_64bit_atomic_cb, NULL);
+   /* Apply lowering for 64bit atomics pre-Xe2 */
+   const bool lower_64bit_atomics = compiler->devinfo->ver < 20;
+   if (lower_64bit_atomics) {
+      /* Ensure robustness, do this before brw_nir_lower_storage_image so that
+       * added image size intrinsics for bounds checkings are properly lowered
+       * for cube images.
+       */
+      NIR_PASS(_, nir, nir_lower_robust_access,
+               accept_64bit_atomic_cb, NULL);
+   }
 
-   NIR_PASS(_, nir, brw_nir_lower_storage_image,
+   NIR_PASS(_, nir, brw_nir_lower_storage_image, compiler,
             &(struct brw_nir_lower_storage_image_opts) {
-               /* Anv only supports Gfx9+ which has better defined typed read
-                * behavior.
+               /* Anv only supports Gfx9+ which has better defined typed
+                * read behavior.
                 */
-               .devinfo = compiler->devinfo,
                .lower_loads = true,
                .lower_stores_64bit = true,
+               .lower_loads_without_formats =
+                  pdevice->instance->emulate_read_without_format,
             });
 
-   /* Switch from image to global */
-   NIR_PASS(_, nir, nir_lower_image_atomics_to_global,
-            accept_64bit_atomic_cb, NULL);
+   if (lower_64bit_atomics) {
+      /* Switch from image to global */
+      NIR_PASS(_, nir, nir_lower_image_atomics_to_global,
+               accept_64bit_atomic_cb, NULL);
 
-   /* Detile for global */
-   NIR_PASS(_, nir, brw_nir_lower_texel_address, compiler->devinfo,
-            pdevice->isl_dev.shader_tiling);
+      /* Detile for global */
+      NIR_PASS(_, nir, brw_nir_lower_texel_address, compiler->devinfo,
+               pdevice->isl_dev.shader_tiling);
+   }
 
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_global,
             nir_address_format_64bit_global);
@@ -1416,6 +1455,14 @@ anv_pipeline_link_mesh(const struct brw_compiler *compiler,
    }
 }
 
+static nir_def *
+mesh_load_provoking_vertex(nir_builder *b, void *data)
+{
+   return nir_load_inline_data_intel(
+      b, 1, 32,
+      .base = ANV_INLINE_PARAM_MESH_PROVOKING_VERTEX);
+}
+
 static void
 anv_pipeline_compile_mesh(const struct brw_compiler *compiler,
                           void *mem_ctx,
@@ -1436,6 +1483,7 @@ anv_pipeline_compile_mesh(const struct brw_compiler *compiler,
       },
       .key = &mesh_stage->key.mesh,
       .prog_data = &mesh_stage->prog_data.mesh,
+      .load_provoking_vertex = mesh_load_provoking_vertex,
    };
 
    if (prev_stage) {
@@ -1487,7 +1535,6 @@ anv_pipeline_link_fs(const struct brw_compiler *compiler,
       num_rt_bindings = stage->key.wm.nr_color_regions;
    } else if (brw_nir_fs_needs_null_rt(
                  compiler->devinfo, stage->nir,
-                 stage->key.wm.multisample_fbo != INTEL_NEVER,
                  stage->key.wm.alpha_to_coverage != INTEL_NEVER)) {
       /* Ensure the shader doesn't discard the writes */
       stage->key.wm.color_outputs_valid = 0x1;
@@ -1572,6 +1619,15 @@ anv_pipeline_compile_fs(const struct brw_compiler *compiler,
                          (uint32_t)fs_stage->prog_data.wm.dispatch_16 +
                          (uint32_t)fs_stage->prog_data.wm.dispatch_32;
    assert(fs_stage->num_stats <= ARRAY_SIZE(fs_stage->stats));
+
+   for (unsigned i = 0; i < ARRAY_SIZE(fs_stage->bind_map.push_ranges); i++) {
+      if (fs_stage->bind_map.push_ranges[i].set == ANV_DESCRIPTOR_SET_PER_PRIM_PADDING) {
+         fs_stage->bind_map.push_ranges[i].length = MAX2(
+            fs_stage->prog_data.wm.num_per_primitive_inputs / 2,
+            fs_stage->bind_map.push_ranges[i].length);
+         break;
+      }
+   }
 }
 
 static void
@@ -1661,10 +1717,13 @@ anv_pipeline_add_executable(struct anv_pipeline *pipeline,
    }
 
    if (INTEL_DEBUG(DEBUG_SHADERS_LINENO) && stage->code) {
-      brw_disassemble_with_lineno(&pipeline->device->physical->compiler->isa,
-                                  stage->stage, (int)stats->dispatch_width,
-                                  stage->source_hash, stage->code, code_offset,
-                                  stage->bin->kernel.offset, stderr);
+      if (!intel_shader_dump_filter ||
+          (intel_shader_dump_filter && intel_shader_dump_filter == stage->source_hash)) {
+         brw_disassemble_with_lineno(&pipeline->device->physical->compiler->isa,
+                                     stage->stage, (int)stats->dispatch_width,
+                                     stage->source_hash, stage->code, code_offset,
+                                     stage->bin->kernel.offset, stderr);
+      }
    }
 
    const struct anv_pipeline_executable exe = {
@@ -1824,6 +1883,7 @@ anv_graphics_pipeline_init_keys(struct anv_graphics_base_pipeline *pipeline,
                               pipeline,
                               state->dynamic,
                               raster_enabled ? state->ms : NULL,
+                              raster_enabled ? state->rs : NULL,
                               state->fsr, state->rp, is_mesh,
                               vue_layout);
          break;
@@ -2279,13 +2339,6 @@ anv_graphics_pipeline_compile(struct anv_graphics_base_pipeline *pipeline,
       anv_stage_allocate_bind_map_tables(&pipeline->base, &stages[s], tmp_ctx);
 
       anv_pipeline_nir_preprocess(&pipeline->base, &stages[s]);
-   }
-
-   if (stages[MESA_SHADER_MESH].info && stages[MESA_SHADER_FRAGMENT].info) {
-      anv_apply_per_prim_attr_wa(stages[MESA_SHADER_MESH].nir,
-                                 stages[MESA_SHADER_FRAGMENT].nir,
-                                 device,
-                                 info);
    }
 
    /* Walk backwards to link */
@@ -3811,8 +3864,6 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
 VkResult
 anv_device_init_rt_shaders(struct anv_device *device)
 {
-   device->bvh_build_method = ANV_BVH_BUILD_METHOD_NEW_SAH;
-
    if (!device->vk.enabled_extensions.KHR_ray_tracing_pipeline)
       return VK_SUCCESS;
 
@@ -3940,6 +3991,64 @@ anv_device_init_rt_shaders(struct anv_device *device)
     * is no need to hold a second reference.
     */
    anv_shader_bin_unref(device, device->rt_trivial_return);
+
+   struct brw_rt_null_ahs {
+      char name[16];
+      struct brw_bs_prog_key key;
+   } null_return_key = {
+      .name = "rt-null-ahs",
+   };
+   device->rt_null_ahs =
+      anv_device_search_for_kernel(device, device->internal_cache,
+                                   &null_return_key, sizeof(null_return_key),
+                                   &cache_hit);
+   if (device->rt_null_ahs == NULL) {
+      void *tmp_ctx = ralloc_context(NULL);
+      nir_shader *null_ahs_nir =
+         brw_nir_create_null_ahs_shader(device->physical->compiler, tmp_ctx);
+
+      NIR_PASS_V(null_ahs_nir, brw_nir_lower_rt_intrinsics,
+                 &null_return_key.key.base, device->info);
+
+      struct brw_bs_prog_data return_prog_data = { 0, };
+      struct brw_compile_bs_params params = {
+         .base = {
+            .nir = null_ahs_nir,
+            .log_data = device,
+            .mem_ctx = tmp_ctx,
+         },
+         .key = &null_return_key.key,
+         .prog_data = &return_prog_data,
+      };
+      const unsigned *return_data =
+         brw_compile_bs(device->physical->compiler, &params);
+
+      struct anv_shader_upload_params upload_params = {
+         .stage               = MESA_SHADER_CALLABLE,
+         .key_data            = &null_return_key,
+         .key_size            = sizeof(null_return_key),
+         .kernel_data         = return_data,
+         .kernel_size         = return_prog_data.base.program_size,
+         .prog_data           = &return_prog_data.base,
+         .prog_data_size      = sizeof(return_prog_data),
+         .bind_map            = &empty_bind_map,
+         .push_desc_info      = &empty_push_desc_info,
+      };
+
+      device->rt_null_ahs =
+         anv_device_upload_kernel(device, device->internal_cache,
+                                  &upload_params);
+
+      ralloc_free(tmp_ctx);
+
+      if (device->rt_null_ahs == NULL)
+         return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+   }
+
+   /* The cache already has a reference and it's not going anywhere so there
+    * is no need to hold a second reference.
+    */
+   anv_shader_bin_unref(device, device->rt_null_ahs);
 
    return VK_SUCCESS;
 }

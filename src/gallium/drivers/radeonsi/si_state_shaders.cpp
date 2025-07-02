@@ -2589,7 +2589,7 @@ void si_ps_key_update_framebuffer(struct si_context *sctx)
 
    /* ps_uses_fbfetch is true only if the color buffer is bound. */
    if (sctx->ps_uses_fbfetch) {
-      struct pipe_surface *cb0 = sctx->framebuffer.state.cbufs[0];
+      struct pipe_surface *cb0 = &sctx->framebuffer.state.cbufs[0];
       struct pipe_resource *tex = cb0->texture;
 
       /* 1D textures are allocated and used as 2D on GFX9. */
@@ -2632,7 +2632,7 @@ void si_ps_key_update_framebuffer_blend_dsa_rasterizer(struct si_context *sctx)
 #endif
 
    key->ps.part.epilog.kill_z = sel->info.writes_z &&
-                                (!sctx->framebuffer.state.zsbuf || !dsa->depth_enabled ||
+                                (!sctx->framebuffer.state.zsbuf.texture || !dsa->depth_enabled ||
                                  (sel->info.output_z_equals_input_z && !rs->multisample_enable));
    key->ps.part.epilog.kill_stencil = sel->info.writes_stencil &&
                                       (!sctx->framebuffer.has_stencil || !dsa->stencil_enabled);
@@ -3483,42 +3483,6 @@ static void si_init_shader_selector_async(void *job, void *gdata, int thread_ind
       }
 
       *si_get_main_shader_part(sel, &shader->key, shader->wave_size) = shader;
-
-      /* Unset "outputs_written" flags for outputs converted to
-       * DEFAULT_VAL, so that later inter-shader optimizations don't
-       * try to eliminate outputs that don't exist in the final
-       * shader.
-       *
-       * This is only done if non-monolithic shaders are enabled.
-       */
-      if ((sel->stage == MESA_SHADER_VERTEX ||
-           sel->stage == MESA_SHADER_TESS_EVAL ||
-           sel->stage == MESA_SHADER_GEOMETRY) &&
-          !shader->key.ge.as_ls && !shader->key.ge.as_es) {
-         unsigned i;
-
-         for (i = 0; i < sel->info.num_outputs; i++) {
-            unsigned semantic = sel->info.output_semantic[i];
-            unsigned ps_input_cntl = shader->info.vs_output_ps_input_cntl[semantic];
-
-            /* OFFSET=0x20 means DEFAULT_VAL, which means VS doesn't export it. */
-            if (G_028644_OFFSET(ps_input_cntl) != 0x20)
-               continue;
-
-            unsigned id;
-
-            /* Remove the output from the mask. */
-            if ((semantic <= VARYING_SLOT_VAR31 || semantic >= VARYING_SLOT_VAR0_16BIT) &&
-                semantic != VARYING_SLOT_POS &&
-                semantic != VARYING_SLOT_PSIZ &&
-                semantic != VARYING_SLOT_CLIP_VERTEX &&
-                semantic != VARYING_SLOT_EDGE &&
-                semantic != VARYING_SLOT_LAYER) {
-               id = si_shader_io_get_unique_index(semantic);
-               sel->info.outputs_written_before_ps &= ~(1ull << id);
-            }
-         }
-      }
    }
 
    /* Free NIR. We only keep serialized NIR after this point. */
@@ -3569,7 +3533,7 @@ void si_get_active_slot_masks(struct si_screen *sscreen, const struct si_shader_
 
    /* The layout is: sb[last] ... sb[0], cb[0] ... cb[last] */
    start = si_get_shaderbuf_slot(num_shaderbufs - 1);
-   *const_and_shader_buffers = u_bit_consecutive64(start, num_shaderbufs + num_constbufs);
+   *const_and_shader_buffers = BITFIELD64_RANGE(start, num_shaderbufs + num_constbufs);
 
    /* The layout is:
     *   - fmask[last] ... fmask[0]     go to [15-last .. 15]
@@ -3584,7 +3548,7 @@ void si_get_active_slot_masks(struct si_screen *sscreen, const struct si_shader_
       num_images = SI_NUM_IMAGES + num_msaa_images; /* add FMASK descriptors */
 
    start = si_get_image_slot(num_images - 1) / 2;
-   *samplers_and_images = u_bit_consecutive64(start, num_images / 2 + num_samplers);
+   *samplers_and_images = BITFIELD64_RANGE(start, num_images / 2 + num_samplers);
 }
 
 static void *si_create_shader_selector(struct pipe_context *ctx,
@@ -4809,22 +4773,16 @@ void si_update_tess_io_layout_state(struct si_context *sctx)
     */
    unsigned num_tcs_output_cp = tcs->info.base.tess.tcs_vertices_out;
    unsigned lds_input_vertex_size = si_shader_lshs_vertex_stride(ls_current);
-   unsigned num_mem_tcs_outputs = util_last_bit64(tcs->info.tcs_outputs_written_for_tes);
-   unsigned num_mem_tcs_patch_outputs =
-      util_last_bit(tcs->info.patch_outputs_written_for_tes |
-                    (!ls_current->is_monolithic || ls_current->key.ge.opt.tes_reads_tess_factors ?
-                        tcs->info.tess_levels_written_for_tes : 0));
+   unsigned num_remapped_tess_level_outputs =
+      !ls_current->is_monolithic || ls_current->key.ge.opt.tes_reads_tess_factors ?
+            tcs->info.num_tess_level_vram_outputs : 0;
    unsigned num_patches, lds_size;
 
    /* Compute NUM_PATCHES and LDS_SIZE. */
-   ac_nir_compute_tess_wg_info(&sctx->screen->info, tcs->info.base.outputs_read,
-                               tcs->info.base.outputs_written, tcs->info.base.patch_outputs_read,
-                               tcs->info.base.patch_outputs_written,
+   ac_nir_compute_tess_wg_info(&sctx->screen->info, &tcs->info.tess_io_info,
                                tcs->info.base.tess.tcs_vertices_out, ls_current->wave_size,
-                               tess_uses_primid, tcs->info.tessfactors_are_def_in_all_invocs,
-                               num_tcs_input_cp, lds_input_vertex_size,
-                               num_mem_tcs_outputs, num_mem_tcs_patch_outputs,
-                               &num_patches, &lds_size);
+                               tess_uses_primid, num_tcs_input_cp, lds_input_vertex_size,
+                               num_remapped_tess_level_outputs, &num_patches, &lds_size);
 
    if (sctx->num_patches_per_workgroup != num_patches) {
       sctx->num_patches_per_workgroup = num_patches;
@@ -4833,24 +4791,30 @@ void si_update_tess_io_layout_state(struct si_context *sctx)
 
    /* Compute userdata SGPRs. */
    unsigned num_lds_vs_outputs = lds_input_vertex_size / 16;
+   unsigned tcs_mem_attrib_stride = align(num_patches * num_tcs_output_cp * 16, 256) / 256;
+
    assert(ls_current->config.lds_size == 0);
    assert(num_tcs_input_cp <= 32);
    assert(num_tcs_output_cp <= 32);
-   assert(num_patches <= 128);
+   assert(num_patches <= 127);
+   assert(tcs_mem_attrib_stride <= 31);
    assert(num_lds_vs_outputs <= 63);
-   assert(num_mem_tcs_outputs <= 63);
+   assert(tcs->info.tess_io_info.highest_remapped_vram_output <= 63);
 
    uint64_t ring_va =
       sctx->ws->cs_is_secure(&sctx->gfx_cs) ?
           si_resource(sctx->screen->tess_rings_tmz)->gpu_address :
           si_resource(sctx->screen->tess_rings)->gpu_address;
-   assert((ring_va & u_bit_consecutive(0, 19)) == 0);
+   assert((ring_va & BITFIELD_MASK(19)) == 0);
+
+   unsigned shared_fields = num_patches | (tcs_mem_attrib_stride << 12) |
+                            (num_lds_vs_outputs << 17) |
+                            (tcs->info.tess_io_info.highest_remapped_vram_output << 23);
 
    sctx->tes_offchip_ring_va_sgpr = ring_va;
-   sctx->tcs_offchip_layout &= 0xe0000000;
-   sctx->tcs_offchip_layout |=
-      (num_patches - 1) | ((num_tcs_output_cp - 1) << 7) | ((num_tcs_input_cp - 1) << 12) |
-      (num_lds_vs_outputs << 17) | (num_mem_tcs_outputs << 23);
+   sctx->tcs_offchip_layout = (sctx->tcs_offchip_layout & 0xe0000000) |
+                              shared_fields | ((num_tcs_input_cp - 1) << 7);
+   sctx->tes_offchip_layout = shared_fields | ((num_tcs_output_cp - 1) << 7);
 
    unsigned ls_hs_rsrc2;
 
@@ -4939,18 +4903,18 @@ static void gfx6_emit_tess_io_layout_state(struct si_context *sctx, unsigned ind
    if (sctx->screen->info.has_set_sh_pairs_packed) {
       gfx11_opt_push_gfx_sh_reg(tes_sh_base + SI_SGPR_TES_OFFCHIP_LAYOUT * 4,
                                 SI_TRACKED_SPI_SHADER_USER_DATA_ES__BASE_VERTEX,
-                                sctx->tcs_offchip_layout);
+                                sctx->tes_offchip_layout);
       gfx11_opt_push_gfx_sh_reg(tes_sh_base + SI_SGPR_TES_OFFCHIP_ADDR * 4,
                                 SI_TRACKED_SPI_SHADER_USER_DATA_ES__DRAWID,
                                 sctx->tes_offchip_ring_va_sgpr);
    } else if (sctx->ngg || sctx->shader.gs.cso) {
       radeon_opt_set_sh_reg2(tes_sh_base + SI_SGPR_TES_OFFCHIP_LAYOUT * 4,
                              SI_TRACKED_SPI_SHADER_USER_DATA_ES__BASE_VERTEX,
-                             sctx->tcs_offchip_layout, sctx->tes_offchip_ring_va_sgpr);
+                             sctx->tes_offchip_layout, sctx->tes_offchip_ring_va_sgpr);
    } else {
       radeon_opt_set_sh_reg2(tes_sh_base + SI_SGPR_TES_OFFCHIP_LAYOUT * 4,
                              SI_TRACKED_SPI_SHADER_USER_DATA_VS__BASE_VERTEX,
-                             sctx->tcs_offchip_layout, sctx->tes_offchip_ring_va_sgpr);
+                             sctx->tes_offchip_layout, sctx->tes_offchip_ring_va_sgpr);
    }
    radeon_end();
 
@@ -4994,7 +4958,7 @@ static void gfx12_emit_tess_io_layout_state(struct si_context *sctx, unsigned in
     */
    gfx12_opt_push_gfx_sh_reg(tes_sh_base + SI_SGPR_TES_OFFCHIP_LAYOUT * 4,
                              SI_TRACKED_SPI_SHADER_USER_DATA_ES__BASE_VERTEX,
-                             sctx->tcs_offchip_layout);
+                             sctx->tes_offchip_layout);
    gfx12_opt_push_gfx_sh_reg(tes_sh_base + SI_SGPR_TES_OFFCHIP_ADDR * 4,
                              SI_TRACKED_SPI_SHADER_USER_DATA_ES__DRAWID,
                              sctx->tes_offchip_ring_va_sgpr);
@@ -5132,7 +5096,9 @@ static void si_emit_spi_ge_ring_state(struct si_context *sctx, unsigned index)
       si_cp_release_acquire_mem_pws(sctx, &sctx->gfx_cs, V_028A90_BOTTOM_OF_PIPE_TS, 0,
                                     V_580_CP_ME, 0);
 
-      uint64_t attr_address = sscreen->attribute_pos_prim_ring->gpu_address;
+      uint64_t attr_address = sctx->ws->cs_is_secure(&sctx->gfx_cs) ?
+         sscreen->attribute_pos_prim_ring_tmz->gpu_address :
+         sscreen->attribute_pos_prim_ring->gpu_address;
       assert((attr_address >> 32) == sscreen->info.address32_hi);
 
       radeon_begin(&sctx->gfx_cs);
@@ -5160,6 +5126,17 @@ static void si_emit_spi_ge_ring_state(struct si_context *sctx, unsigned index)
                      S_0309AC_SPEC_DATA_READ(gfx12_spec_read_auto) |
                      S_0309AC_FORCE_SE_SCOPE(1) |
                      S_0309AC_PAB_NOFILL(1));         /* R_0309AC_GE_PRIM_RING_SIZE */
+
+         if (sctx->gfx_level == GFX12 && sscreen->info.pfp_fw_version >= 2680) {
+            /* Mitigate the HiZ GPU hang by increasing a timeout when
+             * BOTTOM_OF_PIPE_TS is used as the workaround. This must be
+             * emitted when the gfx queue is idle.
+             */
+            const uint32_t timeout = sscreen->options.alt_hiz_logic ? 0xfff : 0;
+
+            radeon_emit(PKT3(PKT3_UPDATE_DB_SUMMARIZER_TIMEOUT, 0, 0));
+            radeon_emit(S_EF1_SUMM_CNTL_EVICT_TIMEOUT(timeout));
+         }
       }
       radeon_end();
    }

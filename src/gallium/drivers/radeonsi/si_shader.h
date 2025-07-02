@@ -129,7 +129,7 @@ struct nir_instr;
 
 #define SI_MAX_ATTRIBS    16
 #define SI_MAX_VS_OUTPUTS 40
-#define SI_USER_CLIP_PLANE_MASK  0x3F
+#define SI_USER_CLIP_PLANE_MASK  BITFIELD_MASK(8)
 
 #define INTERP_MODE_COLOR  INTERP_MODE_COUNT
 
@@ -891,6 +891,7 @@ struct si_shader_part {
 /* si_shader.c */
 struct ac_rtld_binary;
 
+unsigned si_map_io_driver_location(unsigned semantic);
 bool si_compile_shader(struct si_screen *sscreen, struct ac_llvm_compiler *compiler,
                        struct si_shader *shader, struct util_debug_callback *debug);
 bool si_create_shader_variant(struct si_screen *sscreen, struct ac_llvm_compiler *compiler,

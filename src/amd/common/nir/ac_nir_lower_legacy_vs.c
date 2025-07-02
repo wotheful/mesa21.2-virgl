@@ -13,7 +13,7 @@ static void
 gather_outputs(nir_builder *b, nir_function_impl *impl, ac_nir_prerast_out *out)
 {
    /* Assume:
-    * - the shader used nir_lower_io_to_temporaries
+    * - the shader used nir_lower_io_vars_to_temporaries
     * - 64-bit outputs are lowered
     * - no indirect indexing is present
     */
@@ -26,7 +26,7 @@ gather_outputs(nir_builder *b, nir_function_impl *impl, ac_nir_prerast_out *out)
          if (intrin->intrinsic != nir_intrinsic_store_output)
             continue;
 
-         ac_nir_gather_prerast_store_output_info(b, intrin, out);
+         ac_nir_gather_prerast_store_output_info(b, intrin, out, true);
          nir_instr_remove(instr);
       }
    }
@@ -36,6 +36,8 @@ bool
 ac_nir_lower_legacy_vs(nir_shader *nir,
                        enum amd_gfx_level gfx_level,
                        uint32_t clip_cull_mask,
+                       bool write_pos_to_clipvertex,
+                       bool pack_clip_cull_distances,
                        const uint8_t *param_offsets,
                        bool has_param_exports,
                        bool export_primitive_id,
@@ -76,8 +78,8 @@ ac_nir_lower_legacy_vs(nir_shader *nir,
    if (kill_layer)
       export_outputs &= ~VARYING_BIT_LAYER;
 
-   ac_nir_export_position(&b, gfx_level, clip_cull_mask, !has_param_exports,
-                          force_vrs, true, export_outputs, &out, NULL);
+   ac_nir_export_position(&b, gfx_level, clip_cull_mask, write_pos_to_clipvertex, pack_clip_cull_distances,
+                          !has_param_exports, force_vrs, export_outputs, &out, NULL);
 
    if (has_param_exports) {
       ac_nir_export_parameters(&b, param_offsets,

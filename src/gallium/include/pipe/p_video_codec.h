@@ -55,6 +55,7 @@ struct pipe_video_codec
    unsigned height;
    unsigned max_references;
    bool expect_chunked_decode;
+   struct pipe_enc_two_pass_encoder_config two_pass;
 
    /**
     * destroy this video decoder
@@ -246,7 +247,7 @@ struct pipe_video_buffer
    /**
     * get an individual surfaces for each plane
     */
-   struct pipe_surface **(*get_surfaces)(struct pipe_video_buffer *buffer);
+   struct pipe_surface *(*get_surfaces)(struct pipe_video_buffer *buffer);
 
    /*
     * auxiliary associated data

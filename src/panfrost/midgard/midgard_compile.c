@@ -370,29 +370,13 @@ lower_vec816_alu(const nir_instr *instr, const void *cb_data)
    return 4;
 }
 
-static bool
-lower_halt_to_return(nir_builder *b, nir_instr *instr, UNUSED void *_data)
-{
-   if (instr->type != nir_instr_type_jump)
-      return false;
-
-   nir_jump_instr *jump = nir_instr_as_jump(instr);
-   if (jump->type != nir_jump_halt)
-      return false;
-
-   assert(b->impl == nir_shader_get_entrypoint(b->shader));
-   jump->type = nir_jump_return;
-   return true;
-}
-
 void
 midgard_preprocess_nir(nir_shader *nir, unsigned gpu_id)
 {
    unsigned quirks = midgard_get_quirks(gpu_id);
 
    /* Ensure that halt are translated to returns and get ride of them */
-   NIR_PASS(_, nir, nir_shader_instructions_pass, lower_halt_to_return,
-            nir_metadata_all, NULL);
+   NIR_PASS(_, nir, nir_lower_halt_to_return);
    NIR_PASS(_, nir, nir_lower_returns);
 
    /* Lower gl_Position pre-optimisation, but after lowering vars to ssa
@@ -2991,7 +2975,7 @@ mir_add_writeout_loops(compiler_context *ctx)
 
 void
 midgard_compile_shader_nir(nir_shader *nir,
-                           const struct panfrost_compile_inputs *inputs,
+                           const struct pan_compile_inputs *inputs,
                            struct util_dynarray *binary,
                            struct pan_shader_info *info)
 {
@@ -3183,7 +3167,7 @@ midgard_compile_shader_nir(nir_shader *nir,
     * register count for thread count */
    stats.threads = (stats.registers <= 4) ? 4 : (stats.registers <= 8) ? 2 : 1;
 
-   info->stats.isa = PANFROST_STAT_MIDGARD;
+   info->stats.isa = PAN_STAT_MIDGARD;
    info->stats.midgard = stats;
 
    if ((midgard_debug & MIDGARD_DBG_SHADERDB) && !nir->info.internal) {

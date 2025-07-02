@@ -69,15 +69,6 @@ v3d_set_stencil_ref(struct pipe_context *pctx,
 }
 
 static void
-v3d_set_clip_state(struct pipe_context *pctx,
-                   const struct pipe_clip_state *clip)
-{
-        struct v3d_context *v3d = v3d_context(pctx);
-        v3d->clip = *clip;
-        v3d->dirty |= V3D_DIRTY_CLIP;
-}
-
-static void
 v3d_set_sample_mask(struct pipe_context *pctx, unsigned sample_mask)
 {
         struct v3d_context *v3d = v3d_context(pctx);
@@ -523,9 +514,11 @@ v3d_set_framebuffer_state(struct pipe_context *pctx,
 
         v3d->swap_color_rb = 0;
         v3d->blend_dst_alpha_one = 0;
+        v3d->submitted_any_jobs_for_current_fbo = false;
+
         for (int i = 0; i < v3d->framebuffer.nr_cbufs; i++) {
-                struct pipe_surface *cbuf = v3d->framebuffer.cbufs[i];
-                if (!cbuf)
+                const struct pipe_surface *cbuf = &v3d->framebuffer.cbufs[i];
+                if (!cbuf->texture)
                         continue;
 
                 const struct util_format_description *desc =
@@ -1440,7 +1433,6 @@ v3dX(state_init)(struct pipe_context *pctx)
 {
         pctx->set_blend_color = v3d_set_blend_color;
         pctx->set_stencil_ref = v3d_set_stencil_ref;
-        pctx->set_clip_state = v3d_set_clip_state;
         pctx->set_sample_mask = v3d_set_sample_mask;
         pctx->set_constant_buffer = v3d_set_constant_buffer;
         pctx->set_framebuffer_state = v3d_set_framebuffer_state;

@@ -8,6 +8,7 @@
 #include "nvk_entrypoints.h"
 #include "nvk_instance.h"
 #include "nvk_physical_device.h"
+#include "nvk_sampler.h"
 #include "nvk_shader.h"
 #include "nvkmd/nvkmd.h"
 
@@ -178,18 +179,18 @@ nvk_CreateDevice(VkPhysicalDevice physicalDevice,
    nvkmd_mem_unmap(dev->zero_page, 0);
 
    result = nvk_descriptor_table_init(dev, &dev->images,
-                                      8 * 4 /* tic entry size */,
+                                      sizeof(struct nil_descriptor),
                                       1024, 1024 * 1024);
    if (result != VK_SUCCESS)
       goto fail_zero_page;
 
    /* Reserve the descriptor at offset 0 to be the null descriptor */
-   uint32_t null_tic[8] = { 0, };
-   nil_fill_null_tic(&pdev->info, dev->zero_page->va->addr, &null_tic);
+   const struct nil_descriptor null_desc =
+      nil_null_descriptor(&pdev->info, dev->zero_page->va->addr);
 
    ASSERTED uint32_t null_image_index;
    result = nvk_descriptor_table_add(dev, &dev->images,
-                                     null_tic, sizeof(null_tic),
+                                     &null_desc, sizeof(null_desc),
                                      &null_image_index);
    assert(result == VK_SUCCESS);
    assert(null_image_index == 0);
@@ -199,6 +200,22 @@ nvk_CreateDevice(VkPhysicalDevice physicalDevice,
                                       4096, 4096);
    if (result != VK_SUCCESS)
       goto fail_images;
+
+   /* On Kepler and earlier, TXF takes a sampler but SPIR-V defines it as not
+    * taking one so we need to reserve one at device create time.  If we do so
+    * now then it will always have sampler index 0 so we can rely on that in
+    * the compiler lowering code (similar to null descriptors).
+    */
+   if (pdev->info.cls_eng3d < MAXWELL_A) {
+      const struct nvk_sampler_header txf_sampler = nvk_txf_sampler_header(pdev);
+
+      ASSERTED uint32_t txf_sampler_index;
+      result = nvk_descriptor_table_add(dev, &dev->samplers,
+                                        &txf_sampler, sizeof(txf_sampler),
+                                        &txf_sampler_index);
+      assert(result == VK_SUCCESS);
+      assert(txf_sampler_index == 0);
+   }
 
    if (dev->vk.enabled_features.descriptorBuffer ||
        nvk_use_edb_buffer_views(pdev)) {
@@ -243,7 +260,7 @@ nvk_CreateDevice(VkPhysicalDevice physicalDevice,
        pdev->info.cls_eng3d < MAXWELL_A) {
       /* max size is 256k */
       result = nvkmd_dev_alloc_mem(dev->nvkmd, &pdev->vk.base,
-                                   1 << 17, 1 << 20, NVKMD_MEM_LOCAL,
+                                   256 * 1024, 0, NVKMD_MEM_LOCAL,
                                    &dev->vab_memory);
       if (result != VK_SUCCESS)
          goto fail_slm;

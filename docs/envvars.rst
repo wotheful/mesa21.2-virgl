@@ -831,6 +831,11 @@ Intel driver environment variables
       are always dumped if :envvar:`INTEL_SHADER_BIN_DUMP_PATH` variable is
       set.
 
+.. envvar:: INTEL_SHADER_DUMP_FILTER
+
+   Only dump information about shaders that match the specified hexadecimal
+   source hash.
+
 .. envvar:: INTEL_SIMD_DEBUG
 
    a comma-separated list of named flags, which control simd dispatch widths:
@@ -898,6 +903,12 @@ Anvil(ANV) driver environment variables
    If defined to ``1`` or ``true``, this will prevent usage of self
    modifying command buffers to implement ``vkCmdExecuteCommands``. As
    a result of this, it will also disable :ext:`VK_KHR_performance_query`.
+
+.. envvar:: ANV_DEBUG_WAIT_FOR_ATTACH
+
+   If defined, the value is parsed as a regular expression. If the current
+   process name matches the regex, ANV will wait 30 seconds for a debugger
+   to attach before starting device creation.
 
 .. envvar:: ANV_PRIMITIVE_REPLICATION_MAX_VIEWS
 
@@ -1077,11 +1088,6 @@ Gallium environment variables
    specifies a file for logging all errors, warnings, etc. rather than
    stderr.
 
-.. envvar:: GALLIUM_PIPE_SEARCH_DIR
-
-   specifies an alternate search directory for pipe-loader which overrides
-   the compile-time path based on the install location.
-
 .. envvar:: GALLIUM_PRINT_OPTIONS
 
    if non-zero, print all the Gallium environment variables which are
@@ -1186,8 +1192,8 @@ Rusticl environment variables
    a comma-separated list of features to enable. Those are disabled by default
    as they might not be stable enough or break OpenCL conformance.
 
-   - ``fp16`` enables OpenCL half support
    - ``fp64`` enables OpenCL double support
+   - ``intel`` enables various Intel OpenCL extensions
 
 .. envvar:: RUSTICL_DEBUG
 
@@ -1195,6 +1201,7 @@ Rusticl environment variables
 
    - ``allow_invalid_spirv`` disables validation of any input SPIR-V
    - ``clc`` dumps all OpenCL C source being compiled
+   - ``memory`` enables debugging of memory objects
    - ``nir`` dumps nirs in various compilation stages. Might print nothing if shader caching is
              enabled.
    - ``no_reuse_context`` pipe_contexts are not recycled
@@ -1514,6 +1521,8 @@ RADV driver environment variables
       enable NGG culling for GFX11+
    ``nircache``
       cache per-stage NIR for graphics pipelines
+   ``nogttspill``
+      disable GTT spilling when allocating memory
    ``nosam``
       disable optimizations that get enabled when all VRAM is CPU visible.
    ``pswave32``

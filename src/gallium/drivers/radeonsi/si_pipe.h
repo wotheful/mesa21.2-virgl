@@ -661,6 +661,7 @@ struct si_screen {
    struct util_vertex_state_cache vertex_state_cache;
 
    struct si_resource *attribute_pos_prim_ring;
+   struct si_resource *attribute_pos_prim_ring_tmz;
 
    simple_mtx_t tess_ring_lock;
    struct pipe_resource *tess_rings;
@@ -723,6 +724,7 @@ struct si_images {
 
 struct si_framebuffer {
    struct pipe_framebuffer_state state;
+   PIPE_FB_SURFACES; //STOP USING THIS
    unsigned colorbuf_enabled_4bit;
    unsigned spi_shader_col_format;
    unsigned spi_shader_col_format_alpha;
@@ -1199,6 +1201,7 @@ struct si_context {
    bool last_tess_uses_primid;
    unsigned num_patches_per_workgroup;
    unsigned tcs_offchip_layout;
+   unsigned tes_offchip_layout;
    unsigned tes_offchip_ring_va_sgpr;
    unsigned ls_hs_rsrc2;
    unsigned ls_hs_config;

@@ -10,6 +10,7 @@
 #include "ac_surface.h"
 #include "ac_fake_hw_db.h"
 #include "ac_linux_drm.h"
+#include "util/u_sync_provider.h"
 
 #include "addrlib/src/amdgpu_asic_addr.h"
 #include "sid.h"
@@ -301,14 +302,6 @@ drmGetFormatModifierName(uint64_t modifier)
 
 #define CIK_TILE_MODE_COLOR_2D 14
 
-static bool has_timeline_syncobj(int fd)
-{
-   uint64_t value;
-   if (drmGetCap(fd, DRM_CAP_SYNCOBJ_TIMELINE, &value))
-      return false;
-   return value ? true : false;
-}
-
 static bool has_modifiers(int fd)
 {
    uint64_t value;
@@ -471,27 +464,6 @@ static void set_custom_cu_en_mask(struct radeon_info *info)
    }
 }
 
-static bool ac_query_pci_bus_info(int fd, struct radeon_info *info)
-{
-   drmDevicePtr devinfo;
-
-   /* Get PCI info. */
-   int r = drmGetDevice2(fd, 0, &devinfo);
-   if (r) {
-      fprintf(stderr, "amdgpu: drmGetDevice2 failed.\n");
-      info->pci.valid = false;
-      return false;
-   }
-   info->pci.domain = devinfo->businfo.pci->domain;
-   info->pci.bus = devinfo->businfo.pci->bus;
-   info->pci.dev = devinfo->businfo.pci->dev;
-   info->pci.func = devinfo->businfo.pci->func;
-   info->pci.valid = true;
-
-   drmFreeDevice(&devinfo);
-   return true;
-}
-
 static void handle_env_var_force_family(struct radeon_info *info)
 {
    const char *family = debug_get_option("AMD_FORCE_FAMILY", NULL);
@@ -537,10 +509,9 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
 
    handle_env_var_force_family(info);
 
-   if (!ac_query_pci_bus_info(fd, info)) {
-      if (require_pci_bus_info)
-         return AC_QUERY_GPU_INFO_FAIL;
-   }
+   info->pci.valid = ac_drm_query_pci_bus_info(dev, info) == 0;
+   if (require_pci_bus_info && !info->pci.valid)
+      return AC_QUERY_GPU_INFO_FAIL;
 
    assert(info->drm_major == 3);
    info->is_amdgpu = true;
@@ -552,9 +523,7 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       return AC_QUERY_GPU_INFO_FAIL;
    }
 
-   uint64_t cap;
-   r = drmGetCap(fd, DRM_CAP_SYNCOBJ, &cap);
-   if (r != 0 || cap == 0) {
+   if (ac_drm_device_get_sync_provider(dev)->wait == NULL) {
       fprintf(stderr, "amdgpu: syncobj support is missing but is required.\n");
       return AC_QUERY_GPU_INFO_FAIL;
    }
@@ -572,7 +541,7 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       return AC_QUERY_GPU_INFO_FAIL;
    }
 
-   info->userq_ip_mask = device_info.userq_ip_mask;
+   info->userq_ip_mask = debug_get_bool_option("AMD_USERQ", false) ? device_info.userq_ip_mask : 0;
 
    for (unsigned ip_type = 0; ip_type < AMD_NUM_IP_TYPES; ip_type++) {
       struct drm_amdgpu_info_hw_ip ip_info = {0};
@@ -581,15 +550,13 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       if (r)
          continue;
 
-      if (ip_info.available_rings) {
-         info->ip[ip_type].num_queues = util_bitcount(ip_info.available_rings);
-         /* Kernel can set both available_rings and userq_ip_mask. Clear userq_ip_mask. */
-         info->userq_ip_mask &= ~BITFIELD_BIT(ip_type);
-      } else if (info->userq_ip_mask & BITFIELD_BIT(ip_type)) {
+      if (info->userq_ip_mask & BITFIELD_BIT(ip_type)) {
          /* info[ip_type].num_queues variable is also used to describe if that ip_type is
           * supported or not. Setting this variable to 1 for userqueues.
           */
          info->ip[ip_type].num_queues = 1;
+      } else if (ip_info.available_rings) {
+         info->ip[ip_type].num_queues = util_bitcount(ip_info.available_rings);
       } else {
          continue;
       }
@@ -684,6 +651,7 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
          info->vcn_dec_version = (vidip_fw_version & 0x0F000000) >> 24;
          info->vcn_enc_major_version = (vidip_fw_version & 0x00F00000) >> 20;
          info->vcn_enc_minor_version = (vidip_fw_version & 0x000FF000) >> 12;
+         info->vcn_fw_revision = (vidip_fw_version & 0x00000FFF);
       }
    } else {
       if (info->ip[AMD_IP_VCE].num_queues) {
@@ -965,6 +933,12 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       break;
    }
 
+    if (info->ip[AMD_IP_VPE].num_queues)
+      info->vpe_ip_version = (enum vpe_version)VPE_VERSION_VALUE(
+                                                info->ip[AMD_IP_VPE].ver_major,
+                                                info->ip[AMD_IP_VPE].ver_minor,
+                                                info->ip[AMD_IP_VPE].ver_rev);
+
    /* Set which chips have dedicated VRAM. */
    info->has_dedicated_vram = !(device_info.ids_flags & AMDGPU_IDS_FLAGS_FUSION);
 
@@ -998,9 +972,9 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
 
    info->has_userptr = !info->is_virtio;
    info->has_syncobj = true;
-   info->has_timeline_syncobj = !info->is_virtio && has_timeline_syncobj(fd);
+   info->has_timeline_syncobj = ac_drm_device_get_sync_provider(dev)->timeline_wait != NULL;
    info->has_fence_to_handle = true;
-   info->has_local_buffers = !info->is_virtio;
+   info->has_vm_always_valid = !info->is_virtio;
    info->has_bo_metadata = true;
    info->has_eqaa_surface_allocator = info->gfx_level < GFX11;
    /* Disable sparse mappings on GFX6 due to VM faults in CP DMA. Enable them once
@@ -1010,7 +984,7 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
    info->has_gang_submit = info->drm_minor >= 49;
    info->has_gpuvm_fault_query = info->drm_minor >= 55;
    info->has_tmz_support = device_info.ids_flags & AMDGPU_IDS_FLAGS_TMZ;
-   info->kernel_has_modifiers = has_modifiers(fd);
+   info->kernel_has_modifiers = has_modifiers(fd) || (info->is_virtio && fd < 0);
    info->uses_kernel_cu_mask = false; /* Not implemented in the kernel. */
    info->has_graphics = info->ip[AMD_IP_GFX].num_queues > 0;
 
@@ -1315,6 +1289,11 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
     */
    info->has_attr_ring_wait_bug = info->gfx_level == GFX11 || info->gfx_level == GFX11_5;
 
+   /* On GFX8-9, CP DMA is broken with NULL PRT page, it doesn't read 0 and it
+    * doesn't discard writes which causes GPU hangs.
+    */
+   info->has_cp_dma_with_null_prt_bug = info->family >= CHIP_POLARIS10 && info->gfx_level <= GFX9;
+
    /* When LLVM is fixed to handle multiparts shaders, this value will depend
     * on the known good versions of LLVM. Until then, enable the equivalent WA
     * in the nir -> llvm backend.
@@ -1447,7 +1426,8 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
 
    info->has_stable_pstate = info->drm_minor >= 45;
 
-   info->has_zerovram_support = info->drm_minor >= 59;
+   /* AMDGPU 3.59+ clears VRAM on allocations by default. */
+   info->has_default_zerovram_support = info->drm_minor >= 59;
 
    if (info->gfx_level >= GFX12) {
       /* Gfx12 doesn't use pc_lines and pbb_max_alloc_count. */
@@ -1701,7 +1681,7 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       info->has_attr_ring = info->attribute_ring_size_per_se > 0;
    }
 
-   if (info->gfx_level >= GFX11 && debug_get_bool_option("AMD_USERQ", false)) {
+   if (info->gfx_level >= GFX11 && (info->userq_ip_mask & (1 << AMD_IP_GFX))) {
       struct drm_amdgpu_info_uq_fw_areas fw_info;
 
       r = ac_drm_query_uq_fw_area_info(dev, AMDGPU_HW_IP_GFX, 0, &fw_info);
@@ -1710,7 +1690,6 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
          return AC_QUERY_GPU_INFO_FAIL;
       }
 
-      info->has_fw_based_shadowing = true;
       info->fw_based_mcbp.shadow_size = fw_info.gfx.shadow_size;
       info->fw_based_mcbp.shadow_alignment = fw_info.gfx.shadow_alignment;
       info->fw_based_mcbp.csa_size = fw_info.gfx.csa_size;
@@ -2081,7 +2060,7 @@ void ac_print_gpu_info(const struct radeon_info *info, FILE *f)
    fprintf(f, "    drm = %i.%i.%i\n", info->drm_major, info->drm_minor, info->drm_patchlevel);
    fprintf(f, "    has_userptr = %i\n", info->has_userptr);
    fprintf(f, "    has_timeline_syncobj = %u\n", info->has_timeline_syncobj);
-   fprintf(f, "    has_local_buffers = %u\n", info->has_local_buffers);
+   fprintf(f, "    has_vm_always_valid = %u\n", info->has_vm_always_valid);
    fprintf(f, "    has_bo_metadata = %u\n", info->has_bo_metadata);
    fprintf(f, "    has_eqaa_surface_allocator = %u\n", info->has_eqaa_surface_allocator);
    fprintf(f, "    has_sparse_vm_mappings = %u\n", info->has_sparse_vm_mappings);
@@ -2099,7 +2078,7 @@ void ac_print_gpu_info(const struct radeon_info *info, FILE *f)
          info->fw_based_mcbp.csa_alignment);
    }
 
-   fprintf(f, "    has_zerovram_support = %u\n", info->has_zerovram_support);
+   fprintf(f, "    has_default_zerovram_support = %u\n", info->has_default_zerovram_support);
    fprintf(f, "    has_tmz_support = %u\n", info->has_tmz_support);
    fprintf(f, "    has_trap_handler_support = %u\n", info->has_trap_handler_support);
    for (unsigned i = 0; i < AMD_NUM_IP_TYPES; i++) {
@@ -2599,5 +2578,5 @@ uint32_t ac_gfx103_get_cu_mask_ps(const struct radeon_info *info)
     * increase clocks for busy CUs. In the future, we might disable or enable this
     * tweak only for certain apps.
     */
-   return u_bit_consecutive(0, info->min_good_cu_per_sa);
+   return BITFIELD_MASK(info->min_good_cu_per_sa);
 }

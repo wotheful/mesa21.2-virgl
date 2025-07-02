@@ -123,7 +123,7 @@ ngg_gs_clear_primflags(nir_builder *b, nir_def *num_vertices, unsigned stream, l
 static bool
 lower_ngg_gs_store_output(nir_builder *b, nir_intrinsic_instr *intrin, lower_ngg_gs_state *s)
 {
-   ac_nir_gather_prerast_store_output_info(b, intrin, &s->out);
+   ac_nir_gather_prerast_store_output_info(b, intrin, &s->out, true);
    nir_instr_remove(&intrin->instr);
    return true;
 }
@@ -163,7 +163,6 @@ lower_ngg_gs_emit_vertex_with_counter(nir_builder *b, nir_intrinsic_instr *intri
     * In case of packed 16-bit, we assume that has been already packed into 32 bit slots by now.
     */
    u_foreach_bit64(slot, b->shader->info.outputs_written) {
-      const unsigned packed_location = util_bitcount64((b->shader->info.outputs_written & BITFIELD64_MASK(slot)));
       unsigned mask = gs_output_component_mask_with_stream(&s->out.infos[slot], stream);
 
       nir_def **output = s->out.outputs[slot];
@@ -185,7 +184,7 @@ lower_ngg_gs_emit_vertex_with_counter(nir_builder *b, nir_intrinsic_instr *intri
 
          nir_def *store_val = nir_vec(b, values, (unsigned)count);
          nir_store_shared(b, store_val, gs_emit_vtx_addr,
-                          .base = packed_location * 16 + start * 4,
+                          .base = ac_nir_get_lds_gs_out_slot_offset(&s->out, slot, start),
                           .align_mul = 4);
       }
 
@@ -193,13 +192,8 @@ lower_ngg_gs_emit_vertex_with_counter(nir_builder *b, nir_intrinsic_instr *intri
       memset(s->out.outputs[slot], 0, sizeof(s->out.outputs[slot]));
    }
 
-   const unsigned num_32bit_outputs = util_bitcount64(b->shader->info.outputs_written);
-
    /* Store dedicated 16-bit outputs to LDS. */
    u_foreach_bit(slot, b->shader->info.outputs_written_16bit) {
-      const unsigned packed_location = num_32bit_outputs +
-         util_bitcount(b->shader->info.outputs_written_16bit & BITFIELD_MASK(slot));
-
       const unsigned mask_lo = gs_output_component_mask_with_stream(s->out.infos_16bit_lo + slot, stream);
       const unsigned mask_hi = gs_output_component_mask_with_stream(s->out.infos_16bit_hi + slot, stream);
       unsigned mask = mask_lo | mask_hi;
@@ -221,7 +215,7 @@ lower_ngg_gs_emit_vertex_with_counter(nir_builder *b, nir_intrinsic_instr *intri
 
          nir_def *store_val = nir_vec(b, values, (unsigned)count);
          nir_store_shared(b, store_val, gs_emit_vtx_addr,
-                          .base = packed_location * 16 + start * 4,
+                          .base = ac_nir_get_lds_gs_out_slot_offset(&s->out, VARYING_SLOT_VAR0_16BIT + slot, start),
                           .align_mul = 4);
       }
 
@@ -293,6 +287,19 @@ lower_ngg_gs_set_vertex_and_primitive_count(nir_builder *b, nir_intrinsic_instr 
 }
 
 static bool
+gather_output_store_intrinsic(nir_builder *b, nir_intrinsic_instr *intrin, void *state)
+{
+   lower_ngg_gs_state *s = (lower_ngg_gs_state *) state;
+
+   if (intrin->intrinsic == nir_intrinsic_store_output) {
+      ac_nir_gather_prerast_store_output_info(b, intrin, &s->out, false);
+      return true;
+   }
+
+   return false;
+}
+
+static bool
 lower_ngg_gs_intrinsic(nir_builder *b, nir_intrinsic_instr *intrin, void *state)
 {
    lower_ngg_gs_state *s = (lower_ngg_gs_state *) state;
@@ -307,6 +314,12 @@ lower_ngg_gs_intrinsic(nir_builder *b, nir_intrinsic_instr *intrin, void *state)
       return lower_ngg_gs_set_vertex_and_primitive_count(b, intrin, s);
 
    return false;
+}
+
+static void
+gather_output_stores(nir_shader *shader, lower_ngg_gs_state *s)
+{
+   nir_shader_intrinsics_pass(shader, gather_output_store_intrinsic, nir_metadata_all, s);
 }
 
 static void
@@ -368,9 +381,6 @@ ngg_gs_process_out_vertex(nir_builder *b, nir_def *out_vtx_lds_addr, lower_ngg_g
    }
 
    u_foreach_bit64(slot, b->shader->info.outputs_written) {
-      const unsigned packed_location =
-         util_bitcount64((b->shader->info.outputs_written & BITFIELD64_MASK(slot)));
-
       unsigned mask = gs_output_component_mask_with_stream(&s->out.infos[slot], 0);
 
       while (mask) {
@@ -378,7 +388,7 @@ ngg_gs_process_out_vertex(nir_builder *b, nir_def *out_vtx_lds_addr, lower_ngg_g
          u_bit_scan_consecutive_range(&mask, &start, &count);
          nir_def *load =
             nir_load_shared(b, count, 32, exported_out_vtx_lds_addr,
-                            .base = packed_location * 16 + start * 4,
+                            .base = ac_nir_get_lds_gs_out_slot_offset(&s->out, slot, start),
                             .align_mul = 4);
 
          for (int i = 0; i < count; i++)
@@ -386,13 +396,8 @@ ngg_gs_process_out_vertex(nir_builder *b, nir_def *out_vtx_lds_addr, lower_ngg_g
       }
    }
 
-   const unsigned num_32bit_outputs = util_bitcount64(b->shader->info.outputs_written);
-
    /* Dedicated 16-bit outputs. */
    u_foreach_bit(i, b->shader->info.outputs_written_16bit) {
-      const unsigned packed_location = num_32bit_outputs +
-         util_bitcount(b->shader->info.outputs_written_16bit & BITFIELD_MASK(i));
-
       const unsigned mask_lo = gs_output_component_mask_with_stream(&s->out.infos_16bit_lo[i], 0);
       const unsigned mask_hi = gs_output_component_mask_with_stream(&s->out.infos_16bit_hi[i], 0);
       unsigned mask = mask_lo | mask_hi;
@@ -402,7 +407,7 @@ ngg_gs_process_out_vertex(nir_builder *b, nir_def *out_vtx_lds_addr, lower_ngg_g
          u_bit_scan_consecutive_range(&mask, &start, &count);
          nir_def *load =
             nir_load_shared(b, count, 32, exported_out_vtx_lds_addr,
-                            .base = packed_location * 16 + start * 4,
+                            .base = ac_nir_get_lds_gs_out_slot_offset(&s->out, VARYING_SLOT_VAR0_16BIT + i, start),
                             .align_mul = 4);
 
          for (int j = 0; j < count; j++) {
@@ -499,8 +504,10 @@ ngg_gs_emit_output(nir_builder *b, nir_def *max_num_out_vtx, nir_def *max_num_ou
 
       ac_nir_export_position(b, s->options->hw_info->gfx_level,
                              s->options->clip_cull_dist_mask,
+                             s->options->write_pos_to_clipvertex,
+                             s->options->pack_clip_cull_distances,
                              !s->options->has_param_exports,
-                             s->options->force_vrs, true,
+                             s->options->force_vrs,
                              export_outputs, &s->out, NULL);
 
       if (s->options->has_param_exports && !s->options->hw_info->has_attr_ring)
@@ -618,11 +625,12 @@ ngg_gs_cull_primitive(nir_builder *b, nir_def *tid_in_tg, nir_def *max_vtxcnt,
       /* Load the positions from LDS. */
       nir_def *pos[3][4];
       for (unsigned i = 0; i < s->num_vertices_per_primitive; i++) {
-         /* VARYING_SLOT_POS == 0, so base won't count packed location */
-         pos[i][3] = nir_load_shared(b, 1, 32, vtxptr[i], .base = 12); /* W */
-         nir_def *xy = nir_load_shared(b, 2, 32, vtxptr[i], .base = 0, .align_mul = 4);
-         pos[i][0] = nir_channel(b, xy, 0);
-         pos[i][1] = nir_channel(b, xy, 1);
+         /* Load X, Y, W position components. */
+         for (unsigned c = 0; c < 4; c == 1 ? c += 2 : c++) {
+            pos[i][c] = nir_load_shared(b, 1, 32, vtxptr[i],
+                                        .base = ac_nir_get_lds_gs_out_slot_offset(&s->out, VARYING_SLOT_POS, c),
+                                        .align_mul = 4);
+         }
 
          pos[i][0] = nir_fdiv(b, pos[i][0], pos[i][3]);
          pos[i][1] = nir_fdiv(b, pos[i][1], pos[i][3]);
@@ -785,7 +793,7 @@ ngg_gs_build_streamout(nir_builder *b, lower_ngg_gs_state *s)
             ac_nir_ngg_build_streamout_vertex(b, info, stream, so_buffer,
                                        stream_buffer_offsets, i,
                                        exported_vtx_lds_addr[i],
-                                       &s->out, false);
+                                       &s->out);
          }
       }
       nir_pop_if(b, if_emit);
@@ -876,7 +884,8 @@ ngg_gs_finale(nir_builder *b, lower_ngg_gs_state *s)
 }
 
 bool
-ac_nir_lower_ngg_gs(nir_shader *shader, const ac_nir_lower_ngg_options *options)
+ac_nir_lower_ngg_gs(nir_shader *shader, const ac_nir_lower_ngg_options *options,
+                    uint32_t *out_lds_vertex_size)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    assert(impl);
@@ -885,8 +894,6 @@ ac_nir_lower_ngg_gs(nir_shader *shader, const ac_nir_lower_ngg_options *options)
       .options = options,
       .impl = impl,
       .max_num_waves = DIV_ROUND_UP(options->max_workgroup_size, options->wave_size),
-      .lds_offs_primflags = options->gs_out_vtx_bytes,
-      .lds_bytes_per_gs_out_vertex = options->gs_out_vtx_bytes + 4u,
       .streamout_enabled = shader->xfb_info && !options->disable_streamout,
    };
 
@@ -931,11 +938,20 @@ ac_nir_lower_ngg_gs(nir_shader *shader, const ac_nir_lower_ngg_options *options)
    nir_barrier(b, .execution_scope=SCOPE_WORKGROUP, .memory_scope=SCOPE_WORKGROUP,
                          .memory_semantics=NIR_MEMORY_ACQ_REL, .memory_modes=nir_var_mem_shared);
 
+   /* Gather output info (but not output values) to determine the LDS vertex size, and then lower
+    * GS intrinsics. Note that lower_ngg_gs_intrinsics re-gathers outputs again, but it also
+    * gathers output values, which must be done while lowering GS intrinsics and not before.
+    */
+   gather_output_stores(shader, &state);
+   ac_nir_compute_prerast_packed_output_info(&state.out);
+   state.lds_offs_primflags = state.out.total_packed_gs_out_size;
+   /* Make the vertex size in LDS be an odd number of dwords (| 0x4) to reduce LDS bank conflicts. */
+   state.lds_bytes_per_gs_out_vertex = (state.out.total_packed_gs_out_size + 4 /*primflags*/) | 0x4;
+
+   lower_ngg_gs_intrinsics(shader, &state);
+
    if (state.streamout_enabled)
       ngg_gs_build_streamout(b, &state);
-
-   /* Lower the GS intrinsics */
-   lower_ngg_gs_intrinsics(shader, &state);
 
    if (!state.vertex_count[0]) {
       fprintf(stderr, "Could not find set_vertex_and_primitive_count for stream 0. This would hang your GPU.");
@@ -965,5 +981,7 @@ ac_nir_lower_ngg_gs(nir_shader *shader, const ac_nir_lower_ngg_options *options)
    /* Cleanup */
    nir_lower_vars_to_ssa(shader);
    nir_remove_dead_variables(shader, nir_var_function_temp, NULL);
+
+   *out_lds_vertex_size = state.lds_bytes_per_gs_out_vertex;
    return nir_progress(true, impl, nir_metadata_none);
 }

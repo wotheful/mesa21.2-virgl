@@ -106,6 +106,8 @@ get_info(nir_intrinsic_op op)
       STORE(nir_var_shader_temp, scratch, -1, 1, -1, 0, 1)
       LOAD(nir_var_mem_ubo, ubo_uniform_block_intel, 0, 1, -1, 1)
       LOAD(nir_var_mem_ssbo, ssbo_uniform_block_intel, 0, 1, -1, 1)
+      LOAD(nir_var_mem_ssbo, ssbo_intel, 0, 1, -1, 1)
+      STORE(nir_var_mem_ssbo, ssbo_intel, 1, 2, -1, 0, 1)
       LOAD(nir_var_mem_shared, shared_uniform_block_intel, -1, 0, -1, 1)
       LOAD(nir_var_mem_global, global_constant_uniform_block_intel, -1, 0, -1, 1)
       INFO(nir_var_mem_ubo, ldc_nv, false, 0, 1, -1, -1, 1)
@@ -241,8 +243,13 @@ sort_entries(const void *a_, const void *b_)
       return 1;
    else if (a->offset_signed < b->offset_signed)
       return -1;
-   else
-      return 0;
+
+   if (a->index > b->index)
+      return 1;
+   else if (a->index < b->index)
+      return -1;
+
+   return 0;
 }
 
 static unsigned

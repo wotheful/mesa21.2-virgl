@@ -1,5 +1,11 @@
+# When changing this file, you need to bump the following
+# .gitlab-ci/image-tags.yml tags:
+# ALPINE_X86_64_LAVA_TRIGGER_TAG
+
 from io import StringIO
 from typing import TYPE_CHECKING, Any
+import base64
+import shlex
 
 from ruamel.yaml import YAML
 
@@ -230,12 +236,24 @@ class LAVAJobDefinition:
 
         return jwt_steps
 
+    def encode_job_env_vars(self) -> list[str]:
+        steps = []
+        with open(self.job_submitter.env_file, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode()
+            safe_encoded = shlex.quote(encoded)
+
+        steps += [
+            f'echo {safe_encoded} | base64 -d >> /set-job-env-vars.sh',
+        ]
+
+        return steps
+
     def init_stage1_steps(self) -> list[str]:
         run_steps = []
         # job execution script:
         #   - inline .gitlab-ci/common/init-stage1.sh
         #   - fetch and unpack per-pipeline build artifacts from build job
-        #   - fetch and unpack per-job environment from lava-submit.sh
+        #   - fetch, unpack and encode per-job env from lava-submit.sh
         #   - exec .gitlab-ci/common/init-stage2.sh
 
         with open(self.job_submitter.first_stage_init, "r") as init_sh:
@@ -255,6 +273,10 @@ class LAVAJobDefinition:
                 + "https://github.com/allahjasif1990/hdk888-firmware/raw/main/a660_zap.mbn "
                 + '-o "/lib/firmware/qcom/sm8350/a660_zap.mbn"'
             )
+
+        # Forward environmental variables to the DUT
+        # base64-encoded to avoid YAML quoting issues
+        run_steps += self.encode_job_env_vars()
 
         run_steps.append("export CURRENT_SECTION=dut_boot")
 

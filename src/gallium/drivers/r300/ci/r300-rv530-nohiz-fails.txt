@@ -428,8 +428,6 @@ spec@!opengl 1.4@tex-miplevel-selection-lod,Fail
 spec@!opengl 1.4@triangle-rasterization,Fail
 spec@!opengl 1.4@triangle-rasterization-fbo,Fail
 
-spec@!opengl 1.5@depth-tex-compare,Fail
-
 spec@!opengl 2.0@depth-tex-modes-glsl,Fail
 spec@!opengl 2.0@gl-2.0-edgeflag,Fail
 spec@!opengl 2.0@gl-2.0-edgeflag-immediate,Fail
@@ -598,10 +596,6 @@ spec@ext_direct_state_access@textures@CopyTextureImage1DEXT + display list GL_CO
 spec@ext_direct_state_access@textures@CopyTextureSubImage1DEXT + display list GL_COMPILE,Fail
 
 spec@ext_framebuffer_blit@fbo-blit-check-limits,Fail
-
-spec@ext_framebuffer_multisample@alpha-to-coverage-no-draw-buffer-zero 2,Fail
-spec@ext_framebuffer_multisample@alpha-to-coverage-no-draw-buffer-zero 4,Fail
-spec@ext_framebuffer_multisample@alpha-to-coverage-no-draw-buffer-zero 6,Fail
 
 spec@ext_framebuffer_object@fbo-alphatest-formats,Fail
 spec@ext_framebuffer_object@fbo-alphatest-formats@GL_INTENSITY12,Fail
@@ -801,29 +795,7 @@ spec@oes_texture_float@oes_texture_float,Fail
 spec@oes_texture_float@oes_texture_float half,Fail
 
 
-# Xnine tests
-
-Xnine.clip_planes,Fail
-Xnine.depth_clamp,Fail
-Xnine.depthbias,Fail
-Xnine.dsy,Fail
-Xnine.fp_special,Fail
-Xnine.fragment_coords,Fail
-Xnine.mvp_software_vertex_shaders,Fail
-Xnine.negative_fixedfunction_fog,Fail
-Xnine.pixelshader_blending,Fail
-Xnine.pretransformed_varying,Fail
-Xnine.srgbwrite_format,Fail
-Xnine.stream,Fail
-Xnine.texture_transform_flags,Fail
-Xnine.zenable,Fail
-
 # https://gitlab.freedesktop.org/mesa/mesa/-/issues/10557
-Xnine.drawindexedprimitiveup,Crash
-Xnine.fog,Crash
-Xnine.lighting,Crash
-Xnine.specular_lighting,Crash
-Xnine.stencil_cull,Crash
 dEQP-GLES2.functional.texture.mipmap.2d.projected.nearest_nearest_mirror,Fail
 dEQP-GLES2.functional.texture.mipmap.2d.projected.nearest_nearest_repeat,Fail
 dEQP-GLES2.functional.texture.mipmap.2d.projected.nearest_nearest_clamp,Fail
@@ -903,3 +875,22 @@ spec@ext_texture_srgb@fbo-generatemipmap-formats-s3tc@GL_COMPRESSED_SRGB_ALPHA_S
 spec@ext_texture_srgb@fbo-generatemipmap-formats-s3tc@GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT NPOT,Fail
 spec@ext_texture_srgb@fbo-generatemipmap-formats-s3tc@GL_COMPRESSED_SRGB_S3TC_DXT1_EXT,Fail
 spec@ext_texture_srgb@fbo-generatemipmap-formats-s3tc@GL_COMPRESSED_SRGB_S3TC_DXT1_EXT NPOT,Fail
+
+# uprev Piglit in Mesa
+spec@ext_framebuffer_multisample@accuracy all_samples color depthstencil linear,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples color depthstencil,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples color small depthstencil linear,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples color small depthstencil,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples depth_draw depthstencil,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples depth_draw small depthstencil,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples depth_resolve depthstencil,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples depth_resolve small depthstencil,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples srgb depthstencil linear,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples srgb depthstencil,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples srgb small depthstencil linear,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples srgb small depthstencil,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples stencil_draw depthstencil,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples stencil_draw small depthstencil,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples stencil_resolve depthstencil,Fail
+spec@ext_framebuffer_multisample@accuracy all_samples stencil_resolve small depthstencil,Fail
+

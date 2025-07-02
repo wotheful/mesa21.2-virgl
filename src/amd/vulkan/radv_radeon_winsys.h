@@ -173,6 +173,7 @@ struct radeon_winsys_bo {
    /* buffer is added to the BO list of all submissions */
    bool use_global_list;
    bool gfx12_allow_dcc;
+   bool is_virtual; /* sparse buffers */
    enum radeon_bo_domain initial_domain;
    uint64_t obj_id;
 };
@@ -316,6 +317,8 @@ struct radeon_winsys {
    int (*get_fd)(struct radeon_winsys *ws);
 
    const struct vk_sync_type *const *(*get_sync_types)(struct radeon_winsys *ws);
+
+   struct util_sync_provider *(*get_sync_provider)(struct radeon_winsys *ws);
 };
 
 static inline uint64_t

@@ -516,7 +516,9 @@ enum pipe_flush_flags
 #define PIPE_RESOURCE_FLAG_DONT_OVER_ALLOCATE    (1 << 6)
 #define PIPE_RESOURCE_FLAG_DONT_MAP_DIRECTLY     (1 << 7) /* for small visible VRAM */
 #define PIPE_RESOURCE_FLAG_UNMAPPABLE            (1 << 8) /* implies staging transfers due to VK interop */
-#define PIPE_RESOURCE_FLAG_DRV_PRIV              (1 << 9) /* driver/winsys private */
+#define PIPE_RESOURCE_FLAG_FIXED_ADDRESS         (1 << 9) /* virtual memory address never changes */
+#define PIPE_RESOURCE_FLAG_FRONTEND_VM           (1 << 10) /* the frontend assigns addresses */
+#define PIPE_RESOURCE_FLAG_DRV_PRIV              (1 << 11) /* driver/winsys private */
 #define PIPE_RESOURCE_FLAG_FRONTEND_PRIV         (1 << 24) /* gallium frontend private */
 
 /**
@@ -784,6 +786,7 @@ struct pipe_shader_caps {
    bool fp16_const_buffers;
    bool int16;
    bool glsl_16bit_consts;
+   bool glsl_16bit_load_dst; /* fp16 or int16 is AND'ed with this */
    bool tgsi_sqrt_supported;
    bool tgsi_any_inout_decl_range;
 };
@@ -890,13 +893,13 @@ struct pipe_caps {
    bool generate_mipmap;
    bool string_marker;
    bool surface_reinterpret_blocks;
+   bool compressed_surface_reinterpret_blocks_layered;
    bool query_buffer_object;
    bool query_memory_info;
    bool framebuffer_no_attachment;
    bool robust_buffer_access_behavior;
    bool cull_distance;
    bool shader_group_vote;
-   bool polygon_offset_units_unscaled;
    bool shader_array_components;
    bool stream_output_interleave_buffers;
    bool native_fence_fd;
@@ -907,6 +910,7 @@ struct pipe_caps {
    bool int64;
    bool tgsi_tex_txf_lz;
    bool shader_clock;
+   bool shader_realtime_clock;
    bool polygon_mode_fill_rectangle;
    bool shader_ballot;
    bool tes_layer_viewport;
@@ -944,7 +948,6 @@ struct pipe_caps {
    bool fragment_shader_interlock;
    bool fbfetch_coherent;
    bool atomic_float_minmax;
-   bool tgsi_div;
    bool fragment_shader_texture_lod;
    bool fragment_shader_derivatives;
    bool texture_shadow_lod;
@@ -1085,6 +1088,10 @@ struct pipe_caps {
    unsigned shader_subgroup_supported_stages;
    unsigned shader_subgroup_supported_features;
    unsigned multiview;
+
+   /** for CL SVM */
+   uint64_t min_vma;
+   uint64_t max_vma;
 
    enum pipe_vertex_input_alignment vertex_input_alignment;
    enum pipe_endian endianness;

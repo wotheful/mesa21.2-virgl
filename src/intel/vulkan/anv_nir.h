@@ -42,13 +42,17 @@ extern "C" {
                           nir_imm_int(b, 0),                            \
                           .base = anv_drv_const_offset(field),          \
                           .range = components * anv_drv_const_size(field))
+/* Use load_uniform for indexed values since load_push_constant requires that
+ * the offset source is dynamically uniform in the subgroup which we cannot
+ * guarantee.
+ */
 #define anv_load_driver_uniform_indexed(b, components, field, idx)      \
-   nir_load_push_constant(b, components,                                \
-                          anv_drv_const_size(field[0]) * 8,             \
-                          nir_imul_imm(b, idx,                          \
-                                       anv_drv_const_size(field[0])),   \
-                          .base = anv_drv_const_offset(field),          \
-                          .range = anv_drv_const_size(field))
+   nir_load_uniform(b, components,                                      \
+                    anv_drv_const_size(field[0]) * 8,                   \
+                    nir_imul_imm(b, idx,                                \
+                                 anv_drv_const_size(field[0])),         \
+                    .base = anv_drv_const_offset(field),                \
+                    .range = anv_drv_const_size(field))
 
 
 
@@ -139,6 +143,10 @@ bool anv_nir_loads_push_desc_buffer(nir_shader *nir,
 uint32_t anv_nir_push_desc_ubo_fully_promoted(nir_shader *nir,
                                               const struct anv_pipeline_sets_layout *layout,
                                               const struct anv_pipeline_bind_map *bind_map);
+
+void anv_apply_per_prim_attr_wa(struct nir_shader *ms_nir,
+                                struct nir_shader *fs_nir,
+                                struct anv_device *device);
 
 #ifdef __cplusplus
 }

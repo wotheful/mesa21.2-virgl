@@ -118,25 +118,24 @@ option(
 )
 
 option(
+  'gallium-mediafoundation',
+  type : 'feature',
+  deprecated: {'true': 'enabled', 'false': 'disabled'},
+  description : 'enable gallium mediafoundation frontend.',
+)
+
+option(
+  'gallium-mediafoundation-test',
+  type : 'boolean',
+  value : false,
+  description : 'enable gallium mediafoundation frontend tests.',
+)
+
+option(
   'va-libs-path',
   type : 'string',
   value : '',
   description : 'path to put va libraries. defaults to $libdir/dri.'
-)
-
-option(
-  'gallium-xa',
-  type : 'feature',
-  description : 'enable gallium xa frontend.',
-  deprecated: true,
-)
-
-option(
-  'gallium-nine',
-  type : 'boolean',
-  value : false,
-  description : 'build gallium "nine" Direct3D 9.x frontend.',
-  deprecated: true,
 )
 
 option(
@@ -156,7 +155,7 @@ option(
 option(
   'gallium-rusticl-enable-drivers',
   type : 'array',
-  value : ['auto', 'asahi', 'radeonsi'],
+  value : ['auto', 'asahi', 'freedreno', 'radeonsi'],
   description : 'List of gallium drivers for which rusticl will be enabled ' +
                 'by default',
 )
@@ -175,6 +174,25 @@ option(
   value : 'libgallium_d3d10',
   description : 'name of gallium d3d10 target DLL built for Windows. ' +
                 'defaults to libgallium_d3d10.dll to match DRI',
+)
+
+option(
+  'mediafoundation-store-dll',
+  type : 'boolean',
+  value : false,
+  description : 'Selects whether the gallium mediafoundation DLL is built for the store. ',
+)
+
+option(
+  'mediafoundation-codecs',
+  type : 'array',
+  value : ['all'],
+  choices: [
+    'all', 'h264enc', 'h265enc', 'av1enc'
+  ],
+  description : 'List of codecs to build mediafoundation frontend DLLs for. ' +
+                'These will generate different MFT DLLs per codec and link' +
+                'against the gallium drivers which uses the video-codecs option'
 )
 
 option(
@@ -281,7 +299,7 @@ option(
   type : 'array',
   value : [],
   choices : [
-    'device-select', 'intel-nullhw', 'overlay', 'screenshot', 
+    'device-select', 'intel-nullhw', 'overlay', 'screenshot',
     'vram-report-limit',
   ],
   description : 'List of vulkan layers to build'
@@ -637,6 +655,13 @@ option(
 )
 
 option(
+  'sysprof',
+  type : 'boolean',
+  value : false,
+  description : 'Enable tracing markers for sysprof. Default: false'
+)
+
+option(
   'custom-shader-replacement',
   type : 'string',
   value : '',
@@ -670,13 +695,6 @@ option(
     'enabled', 'system', 'auto'
   ],
   description : 'Build the intel-clc compiler or use a system version.'
-)
-
-option(
-  'intel-bvh-grl',
-  type : 'boolean',
-  value : false,
-  description : 'Build the BVH structure using GRL.'
 )
 
 option(
@@ -740,6 +758,14 @@ option(
 )
 
 option(
+  'radeonsi-build-id',
+  type : 'string',
+  value : '',
+  description : 'Override build id for shader cache keys (hex string). ' +
+                'Can be extracted with readelf -x .note.gnu.build-id'
+)
+
+option(
   'min-windows-version',
   type : 'integer',
   min : 7,
@@ -761,10 +787,10 @@ option(
 option(
   'legacy-x11',
   type : 'array',
-  value : ['none'],
+  value : [],
   description : 'Build legacy X11 support features.',
   choices : [
-    'none', 'dri2'
+    'dri2'
   ],
 )
 
@@ -810,4 +836,21 @@ option(
   type : 'boolean',
   value : false,
   description : 'Install the drivers internal shader compilers (if needed for cross builds).'
+)
+
+option(
+  'allow-fallback-for',
+  type : 'array',
+  value : [],
+  choices : [
+    'libdrm',
+  ],
+  description : 'Allows the fallback mechanism if the dependency is not available on the system, or too old.'
+)
+
+option(
+  'virtgpu_kumquat',
+  type : 'boolean',
+  value : false,
+  description : 'Build virtgpu_kumquat (only useful with gfxstream currently)'
 )

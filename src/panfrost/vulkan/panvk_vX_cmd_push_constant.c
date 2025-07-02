@@ -40,20 +40,12 @@ panvk_per_arch(cmd_prepare_push_uniforms)(struct panvk_cmd_buffer *cmdbuf,
       return VK_SUCCESS;
    }
 
-   struct panfrost_ptr push_uniforms = panvk_cmd_alloc_dev_mem(
+   struct pan_ptr push_uniforms = panvk_cmd_alloc_dev_mem(
       cmdbuf, desc, shader->fau.total_count * sizeof(uint64_t) * repeat_count,
       sizeof(uint64_t));
 
    if (!push_uniforms.gpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-
-   if (shader->vk.stage == MESA_SHADER_COMPUTE) {
-      cmdbuf->state.compute.sysvals.push_consts =
-         push_uniforms.gpu + (shader->fau.sysval_count * FAU_WORD_SIZE);
-   } else {
-      cmdbuf->state.gfx.sysvals.push_consts =
-         push_uniforms.gpu + (shader->fau.sysval_count * FAU_WORD_SIZE);
-   }
 
    uint64_t *sysvals = shader->vk.stage == MESA_SHADER_COMPUTE
                           ? (uint64_t *)&cmdbuf->state.compute.sysvals
@@ -63,6 +55,13 @@ panvk_per_arch(cmd_prepare_push_uniforms)(struct panvk_cmd_buffer *cmdbuf,
    uint32_t w, fau = 0;
 
    for (uint32_t i = 0; i < repeat_count; i++) {
+      uint64_t addr =
+         push_uniforms.gpu + i * shader->fau.total_count * sizeof(uint64_t);
+      if (shader->vk.stage == MESA_SHADER_COMPUTE)
+         cmdbuf->state.compute.sysvals.push_uniforms = addr;
+      else
+         cmdbuf->state.gfx.sysvals.push_uniforms = addr;
+
       /* After packing, the sysvals come first, followed by the user push
        * constants. The ordering is encoded shader side, so don't re-order
        * these loops. */

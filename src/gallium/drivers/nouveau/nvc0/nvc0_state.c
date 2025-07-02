@@ -302,10 +302,8 @@ nvc0_rasterizer_state_create(struct pipe_context *pipe,
     if (cso->offset_point || cso->offset_line || cso->offset_tri) {
         SB_BEGIN_3D(so, POLYGON_OFFSET_FACTOR, 1);
         SB_DATA    (so, fui(cso->offset_scale));
-        if (!cso->offset_units_unscaled) {
-           SB_BEGIN_3D(so, POLYGON_OFFSET_UNITS, 1);
-           SB_DATA    (so, fui(cso->offset_units * 2.0f));
-        }
+        SB_BEGIN_3D(so, POLYGON_OFFSET_UNITS, 1);
+        SB_DATA    (so, fui(cso->offset_units * 2.0f));
         SB_BEGIN_3D(so, POLYGON_OFFSET_CLAMP, 1);
         SB_DATA    (so, fui(cso->offset_clamp));
     }
@@ -912,6 +910,7 @@ nvc0_set_framebuffer_state(struct pipe_context *pipe,
 
     nouveau_bufctx_reset(nvc0->bufctx_3d, NVC0_BIND_3D_FB);
 
+    util_framebuffer_init(pipe, fb, nvc0->fb_cbufs, &nvc0->fb_zsbuf);
     util_copy_framebuffer_state(&nvc0->framebuffer, fb);
 
     nvc0->dirty_3d |= NVC0_NEW_3D_FRAMEBUFFER | NVC0_NEW_3D_SAMPLE_LOCATIONS |

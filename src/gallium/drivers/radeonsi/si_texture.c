@@ -231,9 +231,9 @@ static int si_init_surface(struct si_screen *sscreen, struct radeon_surf *surfac
          enum pipe_format format = util_format_get_depth_only(ptex->format);
 
          /* These should be set for both color and Z/S. */
-         surface->u.gfx9.color.dcc_number_type = ac_get_cb_number_type(format);
-         surface->u.gfx9.color.dcc_data_format = ac_get_cb_format(sscreen->info.gfx_level, format);
-         surface->u.gfx9.color.dcc_write_compress_disable = false;
+         surface->u.gfx9.dcc_number_type = ac_get_cb_number_type(format);
+         surface->u.gfx9.dcc_data_format = ac_get_cb_format(sscreen->info.gfx_level, format);
+         surface->u.gfx9.dcc_write_compress_disable = false;
       }
 
       if (modifier == DRM_FORMAT_MOD_INVALID &&
@@ -1493,6 +1493,34 @@ bool si_texture_commit(struct si_context *ctx, struct si_resource *res, unsigned
 
    assert(ctx->gfx_level >= GFX9);
 
+   if ((ctx->gfx_level >= GFX10 && samples > 1) || (surface->flags & RADEON_SURF_Z_OR_SBUFFER)) {
+      uint64_t prev_offset = res->bo_size;
+
+      for (int i = 0; i < box->depth; i++) {
+         for (int j = 0; j < box->height; j++) {
+            for (int k = 0; k < box->width; k++) {
+
+               uint64_t offset = ctx->ws->surface_offset_from_coord(
+                  ctx->ws,
+                  &ctx->screen->info, surface, &res->b.b,
+                  level, box->x + k, box->y + j, i);
+
+               offset = ROUND_DOWN_TO(offset, RADEON_SPARSE_PAGE_SIZE);
+
+               if (offset != prev_offset) {
+                  if (!ctx->ws->buffer_commit(ctx->ws, res->buf, offset, RADEON_SPARSE_PAGE_SIZE,
+                                              commit)) {
+                     assert(false);
+                     return false;
+                  }
+                  prev_offset = offset;
+               }
+            }
+         }
+      }
+      return true;
+   }
+
    unsigned row_pitch = surface->u.gfx9.prt_level_pitch[level] *
       surface->prt_tile_height * surface->prt_tile_depth * blks * samples;
    uint64_t depth_pitch = surface->u.gfx9.surf_slice_size * surface->prt_tile_depth;
@@ -2259,7 +2287,7 @@ void vi_disable_dcc_if_incompatible_format(struct si_context *sctx, struct pipe_
 static struct pipe_surface *si_create_surface(struct pipe_context *pipe, struct pipe_resource *tex,
                                               const struct pipe_surface *templ)
 {
-   unsigned level = templ->u.tex.level;
+   unsigned level = templ->level;
    unsigned width = u_minify(tex->width0, level);
    unsigned height = u_minify(tex->height0, level);
    unsigned width0 = tex->width0;
@@ -2291,21 +2319,23 @@ static struct pipe_surface *si_create_surface(struct pipe_context *pipe, struct 
    if (!surface)
       return NULL;
 
-   assert(templ->u.tex.first_layer <= util_max_layer(tex, templ->u.tex.level));
-   assert(templ->u.tex.last_layer <= util_max_layer(tex, templ->u.tex.level));
+   assert(templ->first_layer <= util_max_layer(tex, templ->level));
+   assert(templ->last_layer <= util_max_layer(tex, templ->level));
 
    pipe_reference_init(&surface->base.reference, 1);
    pipe_resource_reference(&surface->base.texture, tex);
    surface->base.context = pipe;
    surface->base.format = templ->format;
-   surface->base.u = templ->u;
+   surface->base.level = templ->level;
+   surface->base.first_layer = templ->first_layer;
+   surface->base.last_layer = templ->last_layer;
 
    surface->width0 = width0;
    surface->height0 = height0;
 
    surface->dcc_incompatible =
       tex->target != PIPE_BUFFER &&
-      vi_dcc_formats_are_incompatible(tex, templ->u.tex.level, templ->format);
+      vi_dcc_formats_are_incompatible(tex, templ->level, templ->format);
    return &surface->base;
 }
 
@@ -2445,17 +2475,14 @@ static int si_get_sparse_texture_virtual_page_size(struct pipe_screen *screen,
     * x/y/z for all sample count which means the virtual page size can not be fixed
     * to 64KB.
     *
-    * Only enabled for GFX9. GFX10+ removed MS texture support. By specification
-    * ARB_sparse_texture2 need MS texture support, but we relax it by just return
-    * no page size for GFX10+ to keep shader query capbility.
+    * Only enabled for GFX9+. GFX10+ removed MS texture support but
+    * surface_offset_from_coord can be used to determine the pages to commit.
     */
-   if (multi_sample && sscreen->info.gfx_level != GFX9)
+   if (multi_sample && sscreen->info.gfx_level < GFX9)
       return 0;
 
    /* Unsupported formats. */
-   /* TODO: support these formats. */
-   if (util_format_is_depth_or_stencil(format) ||
-       util_format_get_num_planes(format) > 1 ||
+   if (util_format_get_num_planes(format) > 1 ||
        util_format_is_compressed(format))
       return 0;
 

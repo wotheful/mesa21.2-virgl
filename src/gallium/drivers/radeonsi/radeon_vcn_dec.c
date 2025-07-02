@@ -13,7 +13,6 @@
 #include "util/u_memory.h"
 #include "util/u_video.h"
 #include "util/vl_zscan_data.h"
-#include "vl/vl_probs_table.h"
 #include "pspdecryptionparam.h"
 #include "cencdecryptionparam.h"
 
@@ -259,8 +258,6 @@ static rvcn_dec_message_hevc_t get_h265_msg(struct radeon_decoder *dec,
    result.sps_info_flags |= pic->pps->sps->sps_temporal_mvp_enabled_flag << 6;
    result.sps_info_flags |= pic->pps->sps->strong_intra_smoothing_enabled_flag << 7;
    result.sps_info_flags |= pic->pps->sps->separate_colour_plane_flag << 8;
-   if (((struct si_screen *)dec->screen)->info.family == CHIP_CARRIZO)
-      result.sps_info_flags |= 1 << 9;
    if (pic->NumShortTermPictureSliceHeaderBits != 0) {
       result.sps_info_flags |= 1 << 11;
       result.st_rps_bits = pic->NumShortTermPictureSliceHeaderBits;
@@ -418,33 +415,6 @@ static rvcn_dec_message_hevc_t get_h265_msg(struct radeon_decoder *dec,
       memcpy(dec->ref_codec.ref_list, result.ref_pic_list, sizeof(result.ref_pic_list));
    }
    return result;
-}
-
-static void fill_probs_table(void *ptr)
-{
-   rvcn_dec_vp9_probs_t *probs = (rvcn_dec_vp9_probs_t *)ptr;
-
-   memcpy(&probs->coef_probs[0], default_coef_probs_4x4, sizeof(default_coef_probs_4x4));
-   memcpy(&probs->coef_probs[1], default_coef_probs_8x8, sizeof(default_coef_probs_8x8));
-   memcpy(&probs->coef_probs[2], default_coef_probs_16x16, sizeof(default_coef_probs_16x16));
-   memcpy(&probs->coef_probs[3], default_coef_probs_32x32, sizeof(default_coef_probs_32x32));
-   memcpy(probs->y_mode_prob, default_if_y_probs, sizeof(default_if_y_probs));
-   memcpy(probs->uv_mode_prob, default_if_uv_probs, sizeof(default_if_uv_probs));
-   memcpy(probs->single_ref_prob, default_single_ref_p, sizeof(default_single_ref_p));
-   memcpy(probs->switchable_interp_prob, default_switchable_interp_prob,
-          sizeof(default_switchable_interp_prob));
-   memcpy(probs->partition_prob, default_partition_probs, sizeof(default_partition_probs));
-   memcpy(probs->inter_mode_probs, default_inter_mode_probs, sizeof(default_inter_mode_probs));
-   memcpy(probs->mbskip_probs, default_skip_probs, sizeof(default_skip_probs));
-   memcpy(probs->intra_inter_prob, default_intra_inter_p, sizeof(default_intra_inter_p));
-   memcpy(probs->comp_inter_prob, default_comp_inter_p, sizeof(default_comp_inter_p));
-   memcpy(probs->comp_ref_prob, default_comp_ref_p, sizeof(default_comp_ref_p));
-   memcpy(probs->tx_probs_32x32, default_tx_probs_32x32, sizeof(default_tx_probs_32x32));
-   memcpy(probs->tx_probs_16x16, default_tx_probs_16x16, sizeof(default_tx_probs_16x16));
-   memcpy(probs->tx_probs_8x8, default_tx_probs_8x8, sizeof(default_tx_probs_8x8));
-   memcpy(probs->mv_joints, default_nmv_joints, sizeof(default_nmv_joints));
-   memcpy(&probs->mv_comps[0], default_nmv_components, sizeof(default_nmv_components));
-   memset(&probs->nmvc_mask, 0, sizeof(rvcn_dec_vp9_nmv_ctx_mask_t));
 }
 
 static rvcn_dec_message_vp9_t get_vp9_msg(struct radeon_decoder *dec,
@@ -1724,7 +1694,7 @@ static struct pb_buffer_lean *rvcn_dec_message_decode(struct radeon_decoder *dec
          /* ctx needs probs table */
          ptr = dec->ws->buffer_map(dec->ws, dec->ctx.res->buf, NULL,
                                    PIPE_MAP_WRITE | RADEON_MAP_TEMPORARY);
-         fill_probs_table(ptr);
+         ac_vcn_vp9_fill_probs_table(ptr);
          dec->ws->buffer_unmap(dec->ws, dec->ctx.res->buf);
          dec->bs_ptr = NULL;
       } else if (fmt == PIPE_VIDEO_FORMAT_HEVC) {
@@ -2742,7 +2712,7 @@ static int radeon_dec_jpeg_end_frame(struct pipe_video_codec *decoder, struct pi
    if (dec->jpg.crop_y + dec->jpg.crop_height > pic->picture_parameter.picture_height)
       dec->jpg.crop_height = 0;
    dec->send_cmd(dec, target, picture);
-   dec->ws->cs_flush(&dec->jcs[dec->cb_idx], picture->flush_flags, NULL);
+   dec->ws->cs_flush(&dec->jcs[dec->cb_idx], picture->flush_flags, picture->fence);
    next_buffer(dec);
    dec->cb_idx = (dec->cb_idx+1) % dec->njctx;
    return 0;
@@ -2882,8 +2852,7 @@ struct pipe_video_codec *radeon_create_decoder(struct pipe_context *context,
          goto err;
       for (i = 0; i < dec->njctx; i++) {
       /* Initialize the context handle and the command stream. */
-         dec->jctx[i] = dec->ws->ctx_create(dec->ws, RADEON_CTX_PRIORITY_MEDIUM,
-                                            sctx->context_flags & PIPE_CONTEXT_LOSE_CONTEXT_ON_RESET);
+         dec->jctx[i] = dec->ws->ctx_create(dec->ws, sctx->context_flags);
          if (!sctx->ctx)
             goto error;
          if (!dec->ws->cs_create(&dec->jcs[i], dec->jctx[i], ring, NULL, NULL)) {
@@ -2945,7 +2914,7 @@ struct pipe_video_codec *radeon_create_decoder(struct pipe_context *context,
          ptr = dec->ws->buffer_map(dec->ws, buf->res->buf, NULL,
                                    PIPE_MAP_WRITE | RADEON_MAP_TEMPORARY);
          ptr += FB_BUFFER_OFFSET + FB_BUFFER_SIZE;
-         fill_probs_table(ptr);
+         ac_vcn_vp9_fill_probs_table(ptr);
          dec->ws->buffer_unmap(dec->ws, buf->res->buf);
          dec->bs_ptr = NULL;
       }

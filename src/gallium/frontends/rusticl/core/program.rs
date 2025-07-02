@@ -216,6 +216,7 @@ impl ProgramBuild {
             kernel,
             d.screen
                 .nir_shader_compiler_options(pipe_shader_type::PIPE_SHADER_COMPUTE),
+            &d.spirv_caps,
             &d.lib_clc,
             &mut spec_constants,
             d.address_bits(),
@@ -477,19 +478,16 @@ impl Program {
     }
 
     // we need to precalculate the size
-    pub fn bin_sizes(&self) -> Vec<usize> {
+    pub fn bin_sizes(&self) -> impl ExactSizeIterator<Item = usize> + '_ {
         let lock = self.build_info();
 
-        self.devs
-            .iter()
-            .map(|&device| {
-                let info = lock.dev_build(device);
+        self.devs.iter().map(move |&device| {
+            let info = lock.dev_build(device);
 
-                info.spirv.as_ref().map_or(0, |s| {
-                    s.to_bin().len() + device.screen().name().to_bytes().len() + BIN_HEADER_SIZE
-                })
+            info.spirv.as_ref().map_or(0, |s| {
+                s.to_bin().len() + device.screen().name().to_bytes().len() + BIN_HEADER_SIZE
             })
-            .collect()
+        })
     }
 
     pub fn binaries(&self, ptrs: &[*mut u8]) -> CLResult<()> {
@@ -563,7 +561,7 @@ impl Program {
 
         let mut res = true;
         for dev in devs {
-            if !self.do_compile(dev, options, &Vec::new(), &mut info) {
+            if !self.do_compile(dev, options, &[], &mut info) {
                 res = false;
                 continue;
             }

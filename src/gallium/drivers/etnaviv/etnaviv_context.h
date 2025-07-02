@@ -39,6 +39,7 @@
 #include "pipe/p_shader_tokens.h"
 #include "pipe/p_state.h"
 #include "util/slab.h"
+#include "util/u_framebuffer.h"
 #include <util/u_suballoc.h>
 
 struct pipe_screen;

@@ -108,7 +108,7 @@ panvk_lower_sysvals(nir_builder *b, nir_instr *instr, void *data)
       val = load_sysval(b, graphics, bit_size, vs.noperspective_varyings);
       break;
 
-#if PAN_ARCH <= 7
+#if PAN_ARCH < 9
    case nir_intrinsic_load_raw_vertex_offset_pan:
       val = load_sysval(b, graphics, bit_size, vs.raw_vertex_offset);
       break;
@@ -148,7 +148,7 @@ panvk_lower_sysvals(nir_builder *b, nir_instr *instr, void *data)
       const struct vk_input_attachment_location_state *ial =
          ctx->state ? ctx->state->ial : NULL;
 
-      if (ial) {
+      if (ial && nir_src_is_const(intr->src[0])) {
          uint32_t index = nir_src_as_uint(intr->src[0]);
          uint32_t depth_idx = ial->depth_att == MESA_VK_ATTACHMENT_NO_INDEX
                                  ? 0
@@ -211,7 +211,7 @@ panvk_lower_load_vs_input(nir_builder *b, nir_intrinsic_instr *intrin,
    b->cursor = nir_before_instr(&intrin->instr);
    nir_def *ld_attr = nir_load_attribute_pan(
       b, intrin->def.num_components, intrin->def.bit_size,
-      PAN_ARCH <= 7 ?
+      PAN_ARCH < 9 ?
          nir_load_raw_vertex_id_pan(b) :
          nir_load_vertex_id(b),
       nir_load_instance_id(b),
@@ -224,7 +224,27 @@ panvk_lower_load_vs_input(nir_builder *b, nir_intrinsic_instr *intrin,
    return true;
 }
 
-#if PAN_ARCH <= 7
+static bool
+panvk_lower_load_fs_input(nir_builder *b, nir_intrinsic_instr *intrin,
+                          UNUSED void *data)
+{
+   if (intrin->intrinsic != nir_intrinsic_load_input)
+      return false;
+
+   /* Lower PrimitiveID varying loads to the equivalent intrinsic. This only
+    * works since v6 and will require additional changes if PrimitiveID is
+    * explicitly written to (for example by a geometry shader). */
+   if (nir_intrinsic_io_semantics(intrin).location ==
+       VARYING_SLOT_PRIMITIVE_ID) {
+      b->cursor = nir_before_instr(&intrin->instr);
+      nir_def_replace(&intrin->def, nir_load_primitive_id(b));
+      return true;
+   }
+
+   return false;
+}
+
+#if PAN_ARCH < 9
 static bool
 lower_gl_pos_layer_writes(nir_builder *b, nir_instr *instr, void *data)
 {
@@ -319,7 +339,7 @@ panvk_buffer_ubo_addr_format(VkPipelineRobustnessBufferBehaviorEXT robustness)
    case VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED_EXT:
    case VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_EXT:
    case VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_2_EXT:
-      return PAN_ARCH <= 7 ? nir_address_format_32bit_index_offset
+      return PAN_ARCH < 9 ? nir_address_format_32bit_index_offset
                            : nir_address_format_vec2_index_32bit_offset;
    default:
       unreachable("Invalid robust buffer access behavior");
@@ -331,11 +351,11 @@ panvk_buffer_ssbo_addr_format(VkPipelineRobustnessBufferBehaviorEXT robustness)
 {
    switch (robustness) {
    case VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED_EXT:
-      return PAN_ARCH <= 7 ? nir_address_format_64bit_global_32bit_offset
+      return PAN_ARCH < 9 ? nir_address_format_64bit_global_32bit_offset
                            : nir_address_format_vec2_index_32bit_offset;
    case VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_EXT:
    case VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_2_EXT:
-      return PAN_ARCH <= 7 ? nir_address_format_64bit_bounded_global
+      return PAN_ARCH < 9 ? nir_address_format_64bit_bounded_global
                            : nir_address_format_vec2_index_32bit_offset;
    default:
       unreachable("Invalid robust buffer access behavior");
@@ -371,12 +391,12 @@ panvk_preprocess_nir(UNUSED struct vk_physical_device *vk_pdev,
 {
    /* Ensure to regroup output variables at the same location */
    if (nir->info.stage == MESA_SHADER_FRAGMENT)
-      NIR_PASS(_, nir, nir_lower_io_to_vector, nir_var_shader_out);
+      NIR_PASS(_, nir, nir_opt_vectorize_io_vars, nir_var_shader_out);
 
-   NIR_PASS(_, nir, nir_lower_io_to_temporaries, nir_shader_get_entrypoint(nir),
+   NIR_PASS(_, nir, nir_lower_io_vars_to_temporaries, nir_shader_get_entrypoint(nir),
             true, true);
 
-#if PAN_ARCH <= 7
+#if PAN_ARCH < 9
    /* This needs to be done just after the io_to_temporaries pass, because we
     * rely on in/out temporaries to collect the final layer_id value. */
    NIR_PASS(_, nir, lower_layer_writes);
@@ -388,6 +408,9 @@ panvk_preprocess_nir(UNUSED struct vk_physical_device *vk_pdev,
    NIR_PASS(_, nir, nir_opt_copy_prop_vars);
    NIR_PASS(_, nir, nir_opt_combine_stores, nir_var_all);
    NIR_PASS(_, nir, nir_opt_loop);
+
+   NIR_PASS(_, nir, nir_opt_barrier_modes);
+   NIR_PASS(_, nir, nir_opt_acquire_release_barriers, SCOPE_DEVICE);
 
    /* Do texture lowering here.  Yes, it's a duplication of the texture
     * lowering in bifrost_compile.  However, we need to lower texture stuff
@@ -436,26 +459,30 @@ panvk_preprocess_nir(UNUSED struct vk_physical_device *vk_pdev,
 }
 
 static void
-panvk_hash_graphics_state(struct vk_physical_device *device,
-                          const struct vk_graphics_pipeline_state *state,
-                          VkShaderStageFlags stages, blake3_hash blake3_out)
+panvk_hash_state(struct vk_physical_device *device,
+                 const struct vk_graphics_pipeline_state *state,
+                 const struct vk_features *enabled_features,
+                 VkShaderStageFlags stages, blake3_hash blake3_out)
 {
    struct mesa_blake3 blake3_ctx;
    _mesa_blake3_init(&blake3_ctx);
 
-   /* This doesn't impact the shader compile but it does go in the
-    * panvk_shader and gets [de]serialized along with the binary so
-    * we need to hash it.
-    */
-   bool sample_shading_enable = state->ms && state->ms->sample_shading_enable;
-   _mesa_blake3_update(&blake3_ctx, &sample_shading_enable,
-                       sizeof(sample_shading_enable));
+   if (state != NULL) {
+      /* This doesn't impact the shader compile but it does go in the
+       * panvk_shader and gets [de]serialized along with the binary so
+       * we need to hash it.
+       */
+      bool sample_shading_enable =
+         state->ms && state->ms->sample_shading_enable;
+      _mesa_blake3_update(&blake3_ctx, &sample_shading_enable,
+                          sizeof(sample_shading_enable));
 
-   _mesa_blake3_update(&blake3_ctx, &state->rp->view_mask,
-                       sizeof(state->rp->view_mask));
+      _mesa_blake3_update(&blake3_ctx, &state->rp->view_mask,
+                          sizeof(state->rp->view_mask));
 
-   if (state->ial)
-      _mesa_blake3_update(&blake3_ctx, state->ial, sizeof(*state->ial));
+      if (state->ial)
+         _mesa_blake3_update(&blake3_ctx, state->ial, sizeof(*state->ial));
+   }
 
    _mesa_blake3_final(&blake3_ctx, blake3_out);
 }
@@ -544,9 +571,6 @@ collect_push_constant(struct nir_builder *b, nir_intrinsic_instr *intr,
    bool is_sysval = base >= SYSVALS_PUSH_CONST_BASE;
    uint32_t offset, size;
 
-   /* Sysvals should have a constant offset. */
-   assert(!is_sysval || nir_src_is_const(intr->src[0]));
-
    if (is_sysval)
       base -= SYSVALS_PUSH_CONST_BASE;
 
@@ -556,11 +580,12 @@ collect_push_constant(struct nir_builder *b, nir_intrinsic_instr *intr,
       offset = base;
       size = nir_intrinsic_range(intr);
 
-      /* Flag the push_consts sysval as needed if we have an indirect offset. */
+      /* Flag the push_uniforms sysval as needed if we have an indirect offset.
+       */
       if (b->shader->info.stage == MESA_SHADER_COMPUTE)
-         shader_use_sysval(shader, compute, push_consts);
+         shader_use_sysval(shader, compute, push_uniforms);
       else
-         shader_use_sysval(shader, graphics, push_consts);
+         shader_use_sysval(shader, graphics, push_uniforms);
    } else {
       offset = base + nir_src_as_uint(intr->src[0]);
       size = (intr->def.bit_size / 8) * intr->def.num_components;
@@ -587,9 +612,6 @@ move_push_constant(struct nir_builder *b, nir_intrinsic_instr *intr, void *data)
    if (is_sysval)
       base -= SYSVALS_PUSH_CONST_BASE;
 
-   /* Sysvals should have a constant offset. */
-   assert(!is_sysval || nir_src_is_const(intr->src[0]));
-
    b->cursor = nir_before_instr(&intr->instr);
 
    if (nir_src_is_const(intr->src[0])) {
@@ -615,12 +637,13 @@ move_push_constant(struct nir_builder *b, nir_intrinsic_instr *intr, void *data)
        * zero in this pass. */
       unsigned push_const_buf_offset = shader_remapped_sysval_offset(
          shader, b->shader->info.stage == MESA_SHADER_COMPUTE
-                    ? sysval_offset(compute, push_consts)
-                    : sysval_offset(graphics, push_consts));
+                    ? sysval_offset(compute, push_uniforms)
+                    : sysval_offset(graphics, push_uniforms));
       nir_def *push_const_buf = nir_load_push_constant(
          b, 1, 64, nir_imm_int(b, push_const_buf_offset));
-      unsigned push_const_offset =
-         shader_remapped_fau_offset(shader, push_consts, base);
+      unsigned push_const_offset = is_sysval ?
+         shader_remapped_sysval_offset(shader, base) :
+         shader_remapped_push_const_offset(shader, base);
       nir_def *offset = nir_iadd_imm(b, intr->src[0].ssa, push_const_offset);
       unsigned align = nir_combined_align(nir_intrinsic_align_mul(intr),
                                           nir_intrinsic_align_offset(intr));
@@ -688,8 +711,12 @@ lower_load_push_consts(nir_shader *nir, struct panvk_shader *shader)
     * blend constants are never loaded from the fragment shader, but might be
     * needed in the blend shader. */
    shader->fau.sysval_count = BITSET_COUNT(shader->fau.used_sysvals);
+   /* 32 FAUs (256 bytes) are reserved for API push constants */
+   assert(shader->fau.sysval_count <= 64 - 32 && "too many sysval FAUs");
    shader->fau.total_count =
       shader->fau.sysval_count + BITSET_COUNT(shader->fau.used_push_consts);
+   assert(shader->fau.total_count <= 64 &&
+          "asking for more FAUs than the hardware has to offer");
 
    if (!progress)
       return;
@@ -736,7 +763,7 @@ panvk_lower_nir(struct panvk_device *dev, nir_shader *nir,
                 const struct vk_pipeline_robustness_state *rs,
                 uint32_t *noperspective_varyings,
                 const struct vk_graphics_pipeline_state *state,
-                const struct panfrost_compile_inputs *compile_input,
+                const struct pan_compile_inputs *compile_input,
                 struct panvk_shader *shader)
 {
    struct panvk_instance *instance =
@@ -755,7 +782,7 @@ panvk_lower_nir(struct panvk_device *dev, nir_shader *nir,
       NIR_PASS(_, nir, nir_lower_multiview, options);
       /* Pull output writes out of the loop and give them constant offsets for
        * pan_lower_store_components */
-      NIR_PASS(_, nir, nir_lower_io_to_temporaries,
+      NIR_PASS(_, nir, nir_lower_io_vars_to_temporaries,
                nir_shader_get_entrypoint(nir), true, false);
    }
 #endif
@@ -794,6 +821,31 @@ panvk_lower_nir(struct panvk_device *dev, nir_shader *nir,
             nir_address_format_32bit_offset);
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_global,
             nir_address_format_64bit_global);
+
+   /* nir_lower_non_uniform_access needs to run after lowering UBO and SSBO
+    * IO. This means we run it after nir_lower_descriptors, which reads the
+    * array indices, but it's okay because lower_descriptors treats all
+    * dynamic indices the same. */
+   enum nir_lower_non_uniform_access_type lower_non_uniform_access_types =
+      nir_lower_non_uniform_ubo_access |
+      nir_lower_non_uniform_ssbo_access |
+      nir_lower_non_uniform_texture_access |
+      nir_lower_non_uniform_image_access |
+      nir_lower_non_uniform_get_ssbo_size;
+#if PAN_ARCH < 9
+   lower_non_uniform_access_types |=
+      nir_lower_non_uniform_texture_offset_access;
+#endif
+
+   /* In practice, most shaders do not have non-uniform-qualified accesses
+    * thus a cheaper and likely to fail check is run first. */
+   if (nir_has_non_uniform_access(nir, lower_non_uniform_access_types)) {
+      NIR_PASS(_, nir, nir_opt_non_uniform_access);
+      struct nir_lower_non_uniform_access_options opts = {
+         .types = lower_non_uniform_access_types,
+      };
+      NIR_PASS(_, nir, nir_lower_non_uniform_access, &opts);
+   }
 
 #if PAN_ARCH >= 9
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, valhall_lower_get_ssbo_size,
@@ -859,6 +911,9 @@ panvk_lower_nir(struct panvk_device *dev, nir_shader *nir,
    if (stage == MESA_SHADER_VERTEX)
       NIR_PASS(_, nir, nir_shader_intrinsics_pass, panvk_lower_load_vs_input,
                nir_metadata_control_flow, NULL);
+   else if (stage == MESA_SHADER_FRAGMENT)
+      NIR_PASS(_, nir, nir_shader_intrinsics_pass, panvk_lower_load_fs_input,
+               nir_metadata_control_flow, NULL);
 
    /* since valhall, panvk_per_arch(nir_lower_descriptors) separates the
     * driver set and the user sets, and does not need pan_lower_image_index
@@ -884,7 +939,7 @@ panvk_lower_nir(struct panvk_device *dev, nir_shader *nir,
 static VkResult
 panvk_compile_nir(struct panvk_device *dev, nir_shader *nir,
                   VkShaderCreateFlagsEXT shader_flags,
-                  struct panfrost_compile_inputs *compile_input,
+                  struct pan_compile_inputs *compile_input,
                   struct panvk_shader *shader)
 {
    const bool dump_asm =
@@ -936,7 +991,7 @@ panvk_compile_nir(struct panvk_device *dev, nir_shader *nir,
       shader->asm_str = asm_str;
    }
 
-#if PAN_ARCH <= 7
+#if PAN_ARCH < 9
    /* Patch the descriptor count */
    shader->info.ubo_count =
       shader->desc_info.others.count[PANVK_BIFROST_DESC_TABLE_UBO] +
@@ -1019,7 +1074,7 @@ panvk_shader_upload(struct panvk_device *dev, struct panvk_shader *shader,
 {
    shader->code_mem = (struct panvk_priv_mem){0};
 
-#if PAN_ARCH <= 7
+#if PAN_ARCH < 9
    shader->rsd = (struct panvk_priv_mem){0};
 #else
    shader->spd = (struct panvk_priv_mem){0};
@@ -1033,7 +1088,7 @@ panvk_shader_upload(struct panvk_device *dev, struct panvk_shader *shader,
    if (!panvk_priv_mem_dev_addr(shader->code_mem))
       return panvk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 
-#if PAN_ARCH <= 7
+#if PAN_ARCH < 9
    if (shader->info.stage == MESA_SHADER_FRAGMENT)
       return VK_SUCCESS;
 
@@ -1177,7 +1232,7 @@ panvk_shader_destroy(struct vk_device *vk_dev, struct vk_shader *vk_shader,
 
    panvk_pool_free_mem(&shader->code_mem);
 
-#if PAN_ARCH <= 7
+#if PAN_ARCH < 9
    panvk_pool_free_mem(&shader->rsd);
    panvk_pool_free_mem(&shader->desc_info.others.map);
 #else
@@ -1226,7 +1281,7 @@ panvk_compile_shader(struct panvk_device *dev,
       return panvk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    shader->own_bin = true;
-   struct panfrost_compile_inputs inputs = {
+   struct pan_compile_inputs inputs = {
       .gpu_id = phys_dev->kmod.props.gpu_prod_id,
       .view_mask = (state && state->rp) ? state->rp->view_mask : 0,
    };
@@ -1307,6 +1362,7 @@ static VkResult
 panvk_compile_shaders(struct vk_device *vk_dev, uint32_t shader_count,
                       struct vk_shader_compile_info *infos,
                       const struct vk_graphics_pipeline_state *state,
+                      const struct vk_features *enabled_features,
                       const VkAllocationCallbacks *pAllocator,
                       struct vk_shader **shaders_out)
 {
@@ -1370,7 +1426,7 @@ shader_desc_info_deserialize(struct blob_reader *blob,
 {
    shader->desc_info.used_set_mask = blob_read_uint32(blob);
 
-#if PAN_ARCH <= 7
+#if PAN_ARCH < 9
    shader->desc_info.dyn_ubos.count = blob_read_uint32(blob);
    blob_copy_bytes(blob, shader->desc_info.dyn_ubos.map,
                    shader->desc_info.dyn_ubos.count);
@@ -1494,7 +1550,7 @@ shader_desc_info_serialize(struct blob *blob, const struct panvk_shader *shader)
 {
    blob_write_uint32(blob, shader->desc_info.used_set_mask);
 
-#if PAN_ARCH <= 7
+#if PAN_ARCH < 9
    blob_write_uint32(blob, shader->desc_info.dyn_ubos.count);
    blob_write_bytes(blob, shader->desc_info.dyn_ubos.map,
                     sizeof(*shader->desc_info.dyn_ubos.map) *
@@ -1608,10 +1664,10 @@ panvk_shader_get_executable_statistics(
                           statistic_count);
 
    assert(executable_index == 0 || executable_index == 1);
-   struct panfrost_stats *stats =
+   struct pan_stats *stats =
       executable_index ? &shader->info.stats_idvs_varying : &shader->info.stats;
 
-   vk_add_panfrost_stats(out, stats);
+   vk_add_pan_stats(out, stats);
    return vk_outarray_status(&out);
 }
 
@@ -1675,7 +1731,7 @@ panvk_shader_get_executable_internal_representations(
    return incomplete_text ? VK_INCOMPLETE : vk_outarray_status(&out);
 }
 
-#if PAN_ARCH <= 7
+#if PAN_ARCH < 9
 static mali_pixel_format
 get_varying_format(gl_shader_stage stage, gl_varying_slot loc,
                    enum pipe_format pfmt)
@@ -1684,19 +1740,19 @@ get_varying_format(gl_shader_stage stage, gl_varying_slot loc,
    case VARYING_SLOT_PNTC:
    case VARYING_SLOT_PSIZ:
 #if PAN_ARCH <= 6
-      return (MALI_R16F << 12) | panfrost_get_default_swizzle(1);
+      return (MALI_R16F << 12) | pan_get_default_swizzle(1);
 #else
       return (MALI_R16F << 12) | MALI_RGB_COMPONENT_ORDER_R000;
 #endif
    case VARYING_SLOT_POS:
 #if PAN_ARCH <= 6
-      return (MALI_SNAP_4 << 12) | panfrost_get_default_swizzle(4);
+      return (MALI_SNAP_4 << 12) | pan_get_default_swizzle(4);
 #else
       return (MALI_SNAP_4 << 12) | MALI_RGB_COMPONENT_ORDER_RGBA;
 #endif
    default:
       assert(pfmt != PIPE_FORMAT_NONE);
-      return GENX(panfrost_format_from_pipe_format)(pfmt)->hw;
+      return GENX(pan_format_from_pipe_format)(pfmt)->hw;
    }
 }
 
@@ -1740,18 +1796,18 @@ varying_format(gl_varying_slot loc, enum pipe_format pfmt)
    case VARYING_SLOT_PNTC:
    case VARYING_SLOT_PSIZ:
 #if PAN_ARCH <= 6
-      return (MALI_R16F << 12) | panfrost_get_default_swizzle(1);
+      return (MALI_R16F << 12) | pan_get_default_swizzle(1);
 #else
       return (MALI_R16F << 12) | MALI_RGB_COMPONENT_ORDER_R000;
 #endif
    case VARYING_SLOT_POS:
 #if PAN_ARCH <= 6
-      return (MALI_SNAP_4 << 12) | panfrost_get_default_swizzle(4);
+      return (MALI_SNAP_4 << 12) | pan_get_default_swizzle(4);
 #else
       return (MALI_SNAP_4 << 12) | MALI_RGB_COMPONENT_ORDER_RGBA;
 #endif
    default:
-      return GENX(panfrost_format_from_pipe_format)(pfmt)->hw;
+      return GENX(pan_format_from_pipe_format)(pfmt)->hw;
    }
 }
 
@@ -1950,7 +2006,7 @@ const struct vk_device_shader_ops panvk_per_arch(device_shader_ops) = {
    .get_nir_options = panvk_get_nir_options,
    .get_spirv_options = panvk_get_spirv_options,
    .preprocess_nir = panvk_preprocess_nir,
-   .hash_graphics_state = panvk_hash_graphics_state,
+   .hash_state = panvk_hash_state,
    .compile = panvk_compile_shaders,
    .deserialize = panvk_deserialize_shader,
    .cmd_set_dynamic_graphics_state = vk_cmd_set_dynamic_graphics_state,
@@ -1968,7 +2024,7 @@ panvk_internal_shader_destroy(struct vk_device *vk_dev,
 
    panvk_pool_free_mem(&shader->code_mem);
 
-#if PAN_ARCH <= 7
+#if PAN_ARCH < 9
    panvk_pool_free_mem(&shader->rsd);
 #else
    panvk_pool_free_mem(&shader->spd);
@@ -1984,7 +2040,7 @@ static const struct vk_shader_ops panvk_internal_shader_ops = {
 VkResult
 panvk_per_arch(create_internal_shader)(
    struct panvk_device *dev, nir_shader *nir,
-   struct panfrost_compile_inputs *compiler_inputs,
+   struct pan_compile_inputs *compiler_inputs,
    struct panvk_internal_shader **shader_out)
 {
    struct panvk_internal_shader *shader =

@@ -167,6 +167,8 @@ static const driOptionDescription panvk_dri_options[] = {
    DRI_CONF_SECTION_MISCELLANEOUS
       DRI_CONF_PAN_COMPUTE_CORE_MASK(~0ull)
       DRI_CONF_PAN_FRAGMENT_CORE_MASK(~0ull)
+      DRI_CONF_PAN_ENABLE_VERTEX_PIPELINE_STORES_ATOMICS(false)
+      DRI_CONF_PAN_FORCE_ENABLE_SHADER_ATOMICS(false)
    DRI_CONF_SECTION_END
 };
 
@@ -180,6 +182,11 @@ panvk_init_dri_options(struct panvk_instance *instance)
 
    instance->force_vk_vendor =
       driQueryOptioni(&instance->dri_options, "force_vk_vendor");
+
+   instance->enable_vertex_pipeline_stores_atomics = driQueryOptionb(
+      &instance->dri_options, "pan_enable_vertex_pipeline_stores_atomics");
+   instance->force_enable_shader_atomics = driQueryOptionb(
+      &instance->dri_options, "pan_force_enable_shader_atomics");
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL

@@ -46,7 +46,7 @@ csf_alloc_cs_buffer(void *cookie)
    struct panfrost_batch *batch = cookie;
    unsigned capacity = 4096;
 
-   struct panfrost_ptr ptr =
+   struct pan_ptr ptr =
       pan_pool_alloc_aligned(&batch->csf.cs_chunk_pool.base, capacity * 8, 64);
 
    return (struct cs_buffer){
@@ -89,8 +89,8 @@ csf_update_tiler_oom_ctx(struct cs_builder *b, uint64_t addr)
 
 #define FBD_OFFSET(_pass)                                                      \
    (FIELD_OFFSET(fbds) +                                                       \
-    (PAN_INCREMENTAL_RENDERING_##_pass##_PASS * sizeof(struct panfrost_ptr)) + \
-    offsetof(struct panfrost_ptr, gpu))
+    (PAN_INCREMENTAL_RENDERING_##_pass##_PASS * sizeof(struct pan_ptr)) +      \
+    offsetof(struct pan_ptr, gpu))
 
 static int
 csf_oom_handler_init(struct panfrost_context *ctx)
@@ -122,13 +122,13 @@ csf_oom_handler_init(struct panfrost_context *ctx)
    };
    cs_builder_init(&b, &conf, queue);
 
-   struct cs_exception_handler_ctx handler_ctx = {
+   struct cs_function_ctx handler_ctx = {
       .ctx_reg = cs_reg64(&b, TILER_OOM_CTX_REG),
       .dump_addr_offset = offsetof(struct pan_csf_tiler_oom_ctx, dump_addr),
    };
-   struct cs_exception_handler handler;
+   struct cs_function handler;
 
-   cs_exception_handler_def(&b, &handler, handler_ctx) {
+   cs_function_def(&b, &handler, handler_ctx) {
       struct cs_index tiler_oom_ctx = cs_reg64(&b, TILER_OOM_CTX_REG);
       struct cs_index counter = cs_reg32(&b, 47);
       struct cs_index zero = cs_reg64(&b, 48);
@@ -229,7 +229,7 @@ GENX(csf_cleanup_batch)(struct panfrost_batch *batch)
    panfrost_pool_cleanup(&batch->csf.cs_chunk_pool);
 }
 
-static inline struct panfrost_ptr
+static inline struct pan_ptr
 alloc_fbd(struct panfrost_batch *batch)
 {
    return pan_pool_alloc_desc_aggregate(
@@ -665,8 +665,7 @@ csf_get_tiler_desc(struct panfrost_batch *batch)
    if (batch->tiler_ctx.valhall.desc)
       return batch->tiler_ctx.valhall.desc;
 
-   struct panfrost_ptr t =
-      pan_pool_alloc_desc(&batch->pool.base, TILER_CONTEXT);
+   struct pan_ptr t = pan_pool_alloc_desc(&batch->pool.base, TILER_CONTEXT);
 
    batch->csf.pending_tiler_desc = t.cpu;
    batch->tiler_ctx.valhall.desc = t.gpu;
@@ -928,15 +927,15 @@ GENX(csf_launch_grid)(struct panfrost_batch *batch,
    cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_OFFSET_Z), 0);
 
    unsigned threads_per_wg = info->block[0] * info->block[1] * info->block[2];
-   unsigned max_thread_cnt = panfrost_compute_max_thread_count(
-      &dev->kmod.props, cs->info.work_reg_count);
+   unsigned max_thread_cnt =
+      pan_compute_max_thread_count(&dev->kmod.props, cs->info.work_reg_count);
 
    if (info->indirect) {
       /* Load size in workgroups per dimension from memory */
       struct cs_index address = cs_reg64(b, 64);
       cs_move64_to(
          b, address,
-         pan_resource(info->indirect)->image.data.base + info->indirect_offset);
+         pan_resource(info->indirect)->plane.base + info->indirect_offset);
 
       struct cs_index grid_xyz = cs_sr_reg_tuple(b, COMPUTE, JOB_SIZE_X, 3);
       cs_load_to(b, grid_xyz, address, BITFIELD_MASK(3), 0);
@@ -1139,7 +1138,7 @@ csf_emit_draw_state(struct panfrost_batch *batch,
 
    if (ctx->occlusion_query && ctx->active_queries) {
       struct panfrost_resource *rsrc = pan_resource(ctx->occlusion_query->rsrc);
-      cs_move64_to(b, cs_sr_reg64(b, IDVS, OQ), rsrc->image.data.base);
+      cs_move64_to(b, cs_sr_reg64(b, IDVS, OQ), rsrc->plane.base);
       panfrost_batch_write_rsrc(ctx->batch, rsrc, PIPE_SHADER_FRAGMENT);
    }
 
@@ -1379,7 +1378,7 @@ GENX(csf_launch_draw_indirect)(struct panfrost_batch *batch,
    struct cs_index counter = cs_reg32(b, 66);
    cs_move64_to(
       b, address,
-      pan_resource(indirect->buffer)->image.data.base + indirect->offset);
+      pan_resource(indirect->buffer)->plane.base + indirect->offset);
    cs_move32_to(b, counter, indirect->draw_count);
 
    cs_while(b, MALI_CS_CONDITION_GREATER, counter) {
@@ -1639,8 +1638,7 @@ GENX(csf_emit_write_timestamp)(struct panfrost_batch *batch,
    struct cs_builder *b = batch->csf.cs.builder;
 
    struct cs_index address = cs_reg64(b, 40);
-   cs_move64_to(b, address,
-                dst->image.data.base + dst->image.data.offset + offset);
+   cs_move64_to(b, address, dst->plane.base + offset);
    cs_store_state(b, address, 0, MALI_CS_STATE_TIMESTAMP, cs_now());
 
    panfrost_batch_write_rsrc(batch, dst, PIPE_SHADER_VERTEX);

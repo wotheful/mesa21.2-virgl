@@ -26,20 +26,8 @@ if [[ $arch == "arm64" ]]; then
     pushd /baremetal-files
 
     curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-	-O "${KERNEL_IMAGE_BASE}"/arm64/Image
+        -O "${KERNEL_IMAGE_BASE}"/arm64/Image
     curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
         -O "${KERNEL_IMAGE_BASE}"/arm64/Image.gz
-    curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-        -O "${KERNEL_IMAGE_BASE}"/arm64/cheza-kernel
-
-    DEVICE_TREES=""
-    DEVICE_TREES="$DEVICE_TREES apq8016-sbc-usb-host.dtb"
-    DEVICE_TREES="$DEVICE_TREES apq8096-db820c.dtb"
-
-    for DTB in $DEVICE_TREES; do
-	curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-            -O "${KERNEL_IMAGE_BASE}/arm64/$DTB"
-    done
-
     popd
 fi

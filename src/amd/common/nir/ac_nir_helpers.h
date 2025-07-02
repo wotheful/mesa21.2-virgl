@@ -56,6 +56,19 @@ typedef struct
    uint8_t as_varying_mask : 4;
    /* Bitmask of components that are used as sysval, 1 bit per component. */
    uint8_t as_sysval_mask : 4;
+   /* Prefix sum over all component masks. Used by the GS outputs in LDS for NGG GS.
+    * This is set even if components_mask is 0, in which case it's the offset after the last output.
+    */
+   uint16_t packed_slot_gs_out_offset : 12;
+   /* Prefix sum over all component masks. Used by XFB outputs in LDS for NGG VS and TES.
+    * This is set even if xfb_components_mask is 0, in which case it's the offset after the last output.
+    * For NGG GS, it's equal to packed_slot_gs_out_offset because NGG GS has all outputs in LDS.
+    */
+   uint16_t packed_slot_xfb_lds_offset : 12;
+   /* Bitmask of components written by XFB: 4 bits per slot, 1 bit per component.
+    * For NGG GS, it's equal to components_mask because NGG GS has all outputs in LDS.
+    */
+   uint8_t xfb_lds_components_mask : 4;
 } ac_nir_prerast_per_output_info;
 
 typedef struct
@@ -71,6 +84,10 @@ typedef struct
    ac_nir_prerast_per_output_info infos[VARYING_SLOT_MAX];
    ac_nir_prerast_per_output_info infos_16bit_lo[16];
    ac_nir_prerast_per_output_info infos_16bit_hi[16];
+
+   /* The size of all components, packed. */
+   uint16_t total_packed_gs_out_size;
+   uint16_t total_packed_xfb_lds_size;
 } ac_nir_prerast_out;
 
 typedef struct {
@@ -99,9 +116,8 @@ ac_nir_store_var_components(nir_builder *b, nir_variable *var, nir_def *value,
                             unsigned component, unsigned writemask);
 
 void
-ac_nir_gather_prerast_store_output_info(nir_builder *b,
-                                        nir_intrinsic_instr *intrin,
-                                        ac_nir_prerast_out *out);
+ac_nir_gather_prerast_store_output_info(nir_builder *b, nir_intrinsic_instr *intrin,
+                                        ac_nir_prerast_out *out, bool gather_values);
 
 void
 ac_nir_export_primitive(nir_builder *b, nir_def *prim, nir_def *row);
@@ -110,9 +126,10 @@ void
 ac_nir_export_position(nir_builder *b,
                        enum amd_gfx_level gfx_level,
                        uint32_t clip_cull_mask,
+                       bool write_pos_to_clipvertex,
+                       bool pack_clip_cull_distances,
                        bool no_param_export,
                        bool force_vrs,
-                       bool done,
                        uint64_t outputs_written,
                        ac_nir_prerast_out *out,
                        nir_def *row);
@@ -211,19 +228,28 @@ ac_nir_ngg_build_streamout_buffer_info(nir_builder *b,
                                        nir_def *buffer_offsets_ret[4],
                                        nir_def *emit_prim_ret[4]);
 
+unsigned
+ac_nir_get_lds_gs_out_slot_offset(ac_nir_prerast_out *pr_out, gl_varying_slot slot, unsigned component);
+
+unsigned
+ac_nir_ngg_get_xfb_lds_offset(ac_nir_prerast_out *pr_out, gl_varying_slot slot, unsigned component,
+                              bool data_is_16bit);
+
 void
 ac_nir_ngg_build_streamout_vertex(nir_builder *b, nir_xfb_info *info,
                                   unsigned stream, nir_def *so_buffer[4],
                                   nir_def *buffer_offsets[4],
                                   unsigned vertex_index, nir_def *vtx_lds_addr,
-                                  ac_nir_prerast_out *pr_out,
-                                  bool skip_primitive_id);
+                                  ac_nir_prerast_out *pr_out);
 
 void
 ac_nir_repack_invocations_in_workgroup(nir_builder *b, nir_def **input_bool,
                                        ac_nir_wg_repack_result *results, const unsigned num_repacks,
                                        nir_def *lds_addr_base, unsigned max_num_waves,
                                        unsigned wave_size);
+
+void
+ac_nir_compute_prerast_packed_output_info(ac_nir_prerast_out *pr_out);
 
 #ifdef __cplusplus
 }

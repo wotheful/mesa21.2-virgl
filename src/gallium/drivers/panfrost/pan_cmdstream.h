@@ -40,7 +40,7 @@
 
 #include "util/u_prim.h"
 
-#define PAN_GPU_SUPPORTS_DISPATCH_INDIRECT (PAN_ARCH == 7 || PAN_ARCH >= 10)
+#define PAN_GPU_SUPPORTS_DISPATCH_INDIRECT (PAN_ARCH >= 6)
 #define PAN_GPU_SUPPORTS_DRAW_INDIRECT     (PAN_ARCH >= 10)
 
 struct panfrost_rasterizer {
@@ -146,7 +146,7 @@ panfrost_overdraw_alpha(const struct panfrost_context *ctx, bool zero)
    for (unsigned i = 0; i < ctx->pipe_framebuffer.nr_cbufs; ++i) {
       const struct pan_blend_info info = so->info[i];
 
-      bool enabled = ctx->pipe_framebuffer.cbufs[i] && !info.enabled;
+      bool enabled = ctx->pipe_framebuffer.cbufs[i].texture && !info.enabled;
       bool flag = zero ? info.alpha_zero_nop : info.alpha_one_store;
 
       if (enabled && !flag)
@@ -234,7 +234,7 @@ panfrost_fs_required(struct panfrost_compiled_shader *fs,
 
    /* If colour is written we need to execute */
    for (unsigned i = 0; i < state->nr_cbufs; ++i) {
-      if (state->cbufs[i] && blend->info[i].enabled)
+      if (state->cbufs[i].texture && blend->info[i].enabled)
          return true;
    }
 
@@ -284,8 +284,9 @@ panfrost_emit_resources(struct panfrost_batch *batch,
                         enum pipe_shader_type stage)
 {
    struct panfrost_context *ctx = batch->ctx;
-   struct panfrost_ptr T;
-   unsigned nr_tables = PAN_NUM_RESOURCE_TABLES;
+   struct pan_ptr T;
+   unsigned nr_tables =
+      ALIGN_POT(PAN_NUM_RESOURCE_TABLES, MALI_RESOURCE_TABLE_SIZE_ALIGNMENT);
 
    /* Although individual resources need only 16 byte alignment, the
     * resource table as a whole must be 64-byte aligned.
@@ -297,35 +298,33 @@ panfrost_emit_resources(struct panfrost_batch *batch,
 
    memset(T.cpu, 0, nr_tables * pan_size(RESOURCE));
 
-   panfrost_make_resource_table(T, PAN_TABLE_UBO, batch->uniform_buffers[stage],
-                                batch->nr_uniform_buffers[stage]);
+   pan_make_resource_table(T, PAN_TABLE_UBO, batch->uniform_buffers[stage],
+                           batch->nr_uniform_buffers[stage]);
 
-   panfrost_make_resource_table(T, PAN_TABLE_TEXTURE, batch->textures[stage],
-                                ctx->sampler_view_count[stage]);
+   pan_make_resource_table(T, PAN_TABLE_TEXTURE, batch->textures[stage],
+                           ctx->sampler_view_count[stage]);
 
    /* We always need at least 1 sampler for txf to work */
-   panfrost_make_resource_table(T, PAN_TABLE_SAMPLER, batch->samplers[stage],
-                                MAX2(ctx->sampler_count[stage], 1));
+   pan_make_resource_table(T, PAN_TABLE_SAMPLER, batch->samplers[stage],
+                           MAX2(ctx->sampler_count[stage], 1));
 
-   panfrost_make_resource_table(T, PAN_TABLE_IMAGE, batch->images[stage],
-                                util_last_bit(ctx->image_mask[stage]));
+   pan_make_resource_table(T, PAN_TABLE_IMAGE, batch->images[stage],
+                           util_last_bit(ctx->image_mask[stage]));
 
    if (stage == PIPE_SHADER_FRAGMENT) {
-      panfrost_make_resource_table(T, PAN_TABLE_ATTRIBUTE,
-                                   batch->attribs[stage],
-                                   batch->nr_varying_attribs[PIPE_SHADER_FRAGMENT]);
+      pan_make_resource_table(T, PAN_TABLE_ATTRIBUTE, batch->attribs[stage],
+                              batch->nr_varying_attribs[PIPE_SHADER_FRAGMENT]);
    } else if (stage == PIPE_SHADER_VERTEX) {
-      panfrost_make_resource_table(T, PAN_TABLE_ATTRIBUTE,
-                                   batch->attribs[stage],
-                                   ctx->vertex->num_elements);
+      pan_make_resource_table(T, PAN_TABLE_ATTRIBUTE, batch->attribs[stage],
+                              ctx->vertex->num_elements);
 
-      panfrost_make_resource_table(T, PAN_TABLE_ATTRIBUTE_BUFFER,
-                                   batch->attrib_bufs[stage],
-                                   util_last_bit(ctx->vb_mask));
+      pan_make_resource_table(T, PAN_TABLE_ATTRIBUTE_BUFFER,
+                              batch->attrib_bufs[stage],
+                              util_last_bit(ctx->vb_mask));
    }
 
-   panfrost_make_resource_table(T, PAN_TABLE_SSBO, batch->ssbos[stage],
-                                util_last_bit(ctx->ssbo_mask[stage]));
+   pan_make_resource_table(T, PAN_TABLE_SSBO, batch->ssbos[stage],
+                           util_last_bit(ctx->ssbo_mask[stage]));
 
    return T.gpu | nr_tables;
 }

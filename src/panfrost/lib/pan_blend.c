@@ -27,6 +27,7 @@
 
 #ifdef PAN_ARCH
 #include "pan_shader.h"
+#include "pan_texture.h"
 #endif
 
 #include "compiler/nir/nir.h"
@@ -34,7 +35,6 @@
 #include "compiler/nir/nir_conversion_builder.h"
 #include "compiler/nir/nir_lower_blend.h"
 #include "util/format/u_format.h"
-#include "pan_texture.h"
 
 #ifndef PAN_ARCH
 
@@ -175,10 +175,10 @@ to_c_factor(enum pipe_blendfactor factor)
 }
 
 static void
-to_panfrost_function(enum pipe_blend_func blend_func,
-                     enum pipe_blendfactor src_factor,
-                     enum pipe_blendfactor dest_factor, bool is_alpha,
-                     struct MALI_BLEND_FUNCTION *function)
+to_mali_function(enum pipe_blend_func blend_func,
+                 enum pipe_blendfactor src_factor,
+                 enum pipe_blendfactor dest_factor, bool is_alpha,
+                 struct MALI_BLEND_FUNCTION *function)
 {
    assert(can_fixed_function_equation(blend_func, src_factor, dest_factor,
                                       is_alpha, true));
@@ -446,10 +446,10 @@ pan_blend_to_fixed_function_equation(const struct pan_blend_equation equation,
    }
 
    /* Compile the fixed-function blend */
-   to_panfrost_function(equation.rgb_func, equation.rgb_src_factor,
-                        equation.rgb_dst_factor, false, &out->rgb);
-   to_panfrost_function(equation.alpha_func, equation.alpha_src_factor,
-                        equation.alpha_dst_factor, true, &out->alpha);
+   to_mali_function(equation.rgb_func, equation.rgb_src_factor,
+                    equation.rgb_dst_factor, false, &out->rgb);
+   to_mali_function(equation.alpha_func, equation.alpha_src_factor,
+                    equation.alpha_dst_factor, true, &out->alpha);
 
    out->color_mask = equation.color_mask;
 }
@@ -752,7 +752,7 @@ GENX(pan_blend_get_internal_desc)(enum pipe_format fmt, unsigned rt,
       }
 
       cfg.fixed_function.conversion.memory_format =
-         GENX(panfrost_dithered_format_from_pipe_format)(fmt, dithered);
+         GENX(pan_dithered_format_from_pipe_format)(fmt, dithered);
    }
 
    return res.opaque[0] | ((uint64_t)res.opaque[1] << 32);
@@ -782,7 +782,7 @@ GENX(pan_inline_rt_conversion)(nir_shader *s, enum pipe_format *formats)
                                      nir_metadata_control_flow, formats);
 }
 
-#if PAN_ARCH <= 7
+#if PAN_ARCH < 9
 enum mali_register_file_format
 GENX(pan_fixup_blend_type)(nir_alu_type T_size, enum pipe_format format)
 {

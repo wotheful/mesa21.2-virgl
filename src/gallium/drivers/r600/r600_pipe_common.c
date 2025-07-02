@@ -622,7 +622,7 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	if (!rctx->b.const_uploader)
 		return false;
 
-	rctx->ctx = rctx->ws->ctx_create(rctx->ws, RADEON_CTX_PRIORITY_MEDIUM, false);
+	rctx->ctx = rctx->ws->ctx_create(rctx->ws, context_flags);
 	if (!rctx->ctx)
 		return false;
 
@@ -1141,6 +1141,8 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 		.lower_uadd_carry = true,
 		.lower_usub_borrow = true,
 		.lower_bitfield_extract = true,
+		.lower_bitfield_extract16 = true,
+		.lower_bitfield_extract8 = true,
 		.lower_bitfield_insert = true,
 		.lower_extract_byte = true,
 		.lower_extract_word = true,

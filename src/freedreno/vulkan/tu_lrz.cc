@@ -177,7 +177,7 @@ static void
 tu6_disable_lrz_via_depth_view(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 {
    /* Disable direction by writing invalid depth view. */
-   tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_DEPTH_VIEW(
+   tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_VIEW_INFO(
       .base_layer = 0b11111111111,
       .layer_count = 0b11111111111,
       .base_mip_level = 0b1111,
@@ -400,7 +400,7 @@ tu_lrz_tiling_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
       assert(lrz->gpu_dir_tracking);
 
       tu6_write_lrz_reg(cmd, cs,
-         A6XX_GRAS_LRZ_DEPTH_VIEW(.dword = lrz->image_view->view.GRAS_LRZ_DEPTH_VIEW));
+         A6XX_GRAS_LRZ_VIEW_INFO(.dword = lrz->image_view->view.GRAS_LRZ_VIEW_INFO));
       return;
    }
 
@@ -411,7 +411,7 @@ tu_lrz_tiling_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
        */
       if (lrz->gpu_dir_tracking) {
          tu6_disable_lrz_via_depth_view<CHIP>(cmd, cs);
-         tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_DEPTH_VIEW(.dword = 0));
+         tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_VIEW_INFO(.dword = 0));
       }
       return;
    }
@@ -419,7 +419,7 @@ tu_lrz_tiling_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
    if (lrz->fast_clear || lrz->gpu_dir_tracking) {
       if (lrz->gpu_dir_tracking) {
          tu6_write_lrz_reg(cmd, cs,
-            A6XX_GRAS_LRZ_DEPTH_VIEW(.dword = lrz->image_view->view.GRAS_LRZ_DEPTH_VIEW));
+            A6XX_GRAS_LRZ_VIEW_INFO(.dword = lrz->image_view->view.GRAS_LRZ_VIEW_INFO));
       }
 
       tu6_write_lrz_cntl<CHIP>(cmd, cs, {
@@ -433,7 +433,7 @@ tu_lrz_tiling_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
        *  CUR_DIR_UNSET.
        */
       if (CHIP >= A7XX)
-         tu_cs_emit_regs(cs, A7XX_GRAS_LRZ_CLEAR_DEPTH_F32(lrz->depth_clear_value.depthStencil.depth));
+         tu_cs_emit_regs(cs, A7XX_GRAS_LRZ_DEPTH_CLEAR(lrz->depth_clear_value.depthStencil.depth));
       tu_emit_event_write<CHIP>(cmd, cs, FD_LRZ_CLEAR);
    }
 
@@ -469,10 +469,10 @@ tu_lrz_before_tile(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
       if (lrz->gpu_dir_tracking) {
          if (!lrz->valid_at_start) {
             /* Make sure we fail the comparison of depth views */
-            tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_DEPTH_VIEW(.dword = 0));
+            tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_VIEW_INFO(.dword = 0));
          } else {
             tu6_write_lrz_reg(cmd, cs,
-               A6XX_GRAS_LRZ_DEPTH_VIEW(.dword = lrz->image_view->view.GRAS_LRZ_DEPTH_VIEW));
+               A6XX_GRAS_LRZ_VIEW_INFO(.dword = lrz->image_view->view.GRAS_LRZ_VIEW_INFO));
          }
       }
    }
@@ -488,7 +488,7 @@ tu_lrz_tiling_end(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 
       if (cmd->state.lrz.gpu_dir_tracking) {
          tu6_write_lrz_reg(cmd, &cmd->cs,
-            A6XX_GRAS_LRZ_DEPTH_VIEW(.dword = cmd->state.lrz.image_view->view.GRAS_LRZ_DEPTH_VIEW));
+            A6XX_GRAS_LRZ_VIEW_INFO(.dword = cmd->state.lrz.image_view->view.GRAS_LRZ_VIEW_INFO));
       }
 
       /* Enable flushing of LRZ fast-clear and of direction buffer */
@@ -516,7 +516,7 @@ tu_lrz_tiling_end(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
    }
 
    if (cmd->state.lrz.gpu_dir_tracking && disable_for_next_rp) {
-      tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_DEPTH_VIEW(
+      tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_VIEW_INFO(
          .base_layer = 0b11111111111,
          .layer_count = 0b11111111111,
          .base_mip_level = 0b1111,
@@ -552,7 +552,7 @@ tu_lrz_sysmem_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
       tu_disable_lrz<CHIP>(cmd, cs, lrz->image_view->image);
       /* Make sure depth view comparison will fail. */
       tu6_write_lrz_reg(cmd, cs,
-         A6XX_GRAS_LRZ_DEPTH_VIEW(.dword = 0));
+         A6XX_GRAS_LRZ_VIEW_INFO(.dword = 0));
    } else {
       tu6_emit_lrz_buffer<CHIP>(cs, lrz->image_view->image);
       /* Even though we disable LRZ writes in sysmem mode - there is still
@@ -565,7 +565,7 @@ tu_lrz_sysmem_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
          });
 
          if (CHIP >= A7XX)
-            tu_cs_emit_regs(cs, A7XX_GRAS_LRZ_CLEAR_DEPTH_F32(lrz->depth_clear_value.depthStencil.depth));
+            tu_cs_emit_regs(cs, A7XX_GRAS_LRZ_DEPTH_CLEAR(lrz->depth_clear_value.depthStencil.depth));
          tu_emit_event_write<CHIP>(cmd, &cmd->cs, FD_LRZ_CLEAR);
          tu_emit_event_write<CHIP>(cmd, &cmd->cs, FD_LRZ_FLUSH);
       } else {
@@ -665,7 +665,7 @@ tu_lrz_clear_depth_image(struct tu_cmd_buffer *cmd,
 
    tu6_emit_lrz_buffer<CHIP>(&cmd->cs, image);
 
-   tu6_write_lrz_reg(cmd, &cmd->cs, A6XX_GRAS_LRZ_DEPTH_VIEW(
+   tu6_write_lrz_reg(cmd, &cmd->cs, A6XX_GRAS_LRZ_VIEW_INFO(
          .base_layer = range->baseArrayLayer,
          .layer_count = vk_image_subresource_layer_count(&image->vk, range),
          .base_mip_level = range->baseMipLevel,
@@ -678,7 +678,7 @@ tu_lrz_clear_depth_image(struct tu_cmd_buffer *cmd,
    });
 
    if (CHIP >= A7XX)
-      tu_cs_emit_regs(&cmd->cs, A7XX_GRAS_LRZ_CLEAR_DEPTH_F32(pDepthStencil->depth));
+      tu_cs_emit_regs(&cmd->cs, A7XX_GRAS_LRZ_DEPTH_CLEAR(pDepthStencil->depth));
    tu_emit_event_write<CHIP>(cmd, &cmd->cs, FD_LRZ_CLEAR);
    tu_emit_event_write<CHIP>(cmd, &cmd->cs, FD_LRZ_FLUSH);
 
@@ -713,37 +713,13 @@ tu_lrz_flush_valid_during_renderpass(struct tu_cmd_buffer *cmd,
    if (cmd->state.lrz.valid && !cmd->state.lrz.disable_write_for_rp)
       return;
 
-   tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_DEPTH_VIEW(
+   tu6_write_lrz_reg(cmd, cs, A6XX_GRAS_LRZ_VIEW_INFO(
       .base_layer = 0b11111111111,
       .layer_count = 0b11111111111,
       .base_mip_level = 0b1111,
    ));
 }
 TU_GENX(tu_lrz_flush_valid_during_renderpass);
-
-/* Returns true if stencil may be written when depth test fails.
- * This could be either from stencil written on depth test fail itself,
- * or stencil written on the stencil test failure where subsequent depth
- * test may also fail.
- */
-static bool
-tu6_stencil_written_on_depth_fail(struct vk_stencil_test_face_state *face)
-{
-   switch (face->op.compare) {
-   case VK_COMPARE_OP_ALWAYS:
-      /* The stencil op always passes, no need to worry about failOp. */
-      return face->op.depth_fail != VK_STENCIL_OP_KEEP;
-   case VK_COMPARE_OP_NEVER:
-      /* The stencil op always fails, so failOp will always be used. */
-      return face->op.fail != VK_STENCIL_OP_KEEP;
-   default:
-      /* If the stencil test fails, depth may fail as well, so we can write
-       * stencil when the depth fails if failOp is not VK_STENCIL_OP_KEEP.
-       */
-      return face->op.fail != VK_STENCIL_OP_KEEP ||
-             face->op.depth_fail != VK_STENCIL_OP_KEEP;
-   }
-}
 
 template <chip CHIP>
 static struct A6XX_GRAS_LRZ_CNTL
@@ -759,8 +735,8 @@ tu6_calculate_lrz_state(struct tu_cmd_buffer *cmd,
 
    struct A6XX_GRAS_LRZ_CNTL gras_lrz_cntl = { 0 };
 
-   if (fs->variant->writes_pos && !fs->variant->fs.early_fragment_tests)
-      cmd->state.lrz.force_late_z = true;
+   cmd->state.lrz.force_late_z =
+      fs->variant->writes_pos && !fs->variant->fs.early_fragment_tests;
 
    if (!cmd->state.lrz.valid) {
       return gras_lrz_cntl;
@@ -935,21 +911,6 @@ tu6_calculate_lrz_state(struct tu_cmd_buffer *cmd,
       cmd->state.lrz.prev_direction = lrz_direction;
 
    if (cmd->vk.dynamic_graphics_state.ds.stencil.test_enable) {
-      /* Because the LRZ test runs first, failing the LRZ test may result in
-       * skipping the stencil test and subsequent stencil write. This is ok if
-       * stencil is only written when the depth test passes, because then the
-       * LRZ test will also pass, but if it may be written when the depth or
-       * stencil test fails then we need to disable the LRZ test for the draw.
-       */
-      bool writes_stencil_on_ds_fail =
-         cmd->state.stencil_front_write &&
-         tu6_stencil_written_on_depth_fail(
-            &cmd->vk.dynamic_graphics_state.ds.stencil.front);
-      writes_stencil_on_ds_fail |=
-         cmd->state.stencil_back_write &&
-         tu6_stencil_written_on_depth_fail(
-            &cmd->vk.dynamic_graphics_state.ds.stencil.back);
-
       bool frag_may_be_killed_by_stencil =
          !(cmd->vk.dynamic_graphics_state.ds.stencil.front.op.compare ==
               VK_COMPARE_OP_ALWAYS &&
@@ -965,7 +926,13 @@ tu6_calculate_lrz_state(struct tu_cmd_buffer *cmd,
          cmd->state.lrz.disable_write_for_rp = true;
       }
 
-      if (writes_stencil_on_ds_fail)
+      /* Because the LRZ test runs first, failing the LRZ test may result in
+       * skipping the stencil test and subsequent stencil write. This is ok if
+       * stencil is only written when the depth test passes, because then the
+       * LRZ test will also pass, but if it may be written when the depth or
+       * stencil test fails then we need to disable the LRZ test for the draw.
+       */
+      if (cmd->state.stencil_written_on_depth_fail)
          temporary_disable_lrz = true;
    }
 

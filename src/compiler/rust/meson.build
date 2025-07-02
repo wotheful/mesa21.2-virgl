@@ -36,9 +36,7 @@ _compiler_binding_types = [
 ]
 
 _compiler_bindgen_args = [
-  '--raw-line', '#![allow(non_camel_case_types)]',
-  '--raw-line', '#![allow(non_snake_case)]',
-  '--raw-line', '#![allow(non_upper_case_globals)]',
+  bindgen_output_args,
   '--allowlist-var', 'NIR_.*',
   '--allowlist-var', 'nir_.*_infos',
   '--allowlist-var', 'rust_.*',
@@ -49,6 +47,7 @@ _compiler_bindgen_args = [
   '--allowlist-function', 'u_memstream.*',
   '--allowlist-type', 'u_memstream',
   '--no-prepend-enum-name',
+  '--with-derive-default',
 ]
 
 foreach type : _compiler_binding_types

@@ -520,6 +520,7 @@ typedef struct {
       bool combine;              /* BRANCHC */
       bool format;               /* LEA_TEX */
       bool z_stencil;            /* LD_TILE */
+      bool scheduling_barrier;   /* NOP */
 
       struct {
          enum bi_special special;   /* FADD_RSCALE, FMA_RSCALE */
@@ -631,6 +632,12 @@ static inline bool
 bi_is_staging_src(const bi_instr *I, unsigned s)
 {
    return (s == 0 || s == 4) && bi_get_opcode_props(I)->sr_read;
+}
+
+static inline bool
+bi_is_scheduling_barrier(const bi_instr *I)
+{
+   return I->op == BI_OPCODE_NOP && I->scheduling_barrier;
 }
 
 /*
@@ -880,12 +887,13 @@ bi_block_add_successor(bi_block *block, bi_block *successor)
 
 /* Subset of pan_shader_info needed per-variant, in order to support IDVS */
 struct bi_shader_info {
-   struct panfrost_ubo_push *push;
+   struct pan_ubo_push *push;
    struct bifrost_shader_info *bifrost;
-   struct panfrost_stats stats;
+   struct pan_stats stats;
    unsigned tls_size;
    unsigned work_reg_count;
    unsigned push_offset;
+   bool has_ld_gclk_instr;
 };
 
 /* State of index-driven vertex shading for current shader */
@@ -904,7 +912,7 @@ enum bi_idvs_mode {
 };
 
 typedef struct {
-   const struct panfrost_compile_inputs *inputs;
+   const struct pan_compile_inputs *inputs;
    nir_shader *nir;
    struct bi_shader_info info;
    gl_shader_stage stage;

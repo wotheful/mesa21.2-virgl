@@ -1,7 +1,6 @@
 # Copyright © 2022 Collabora Ltd. and Red Hat Inc.
 # SPDX-License-Identifier: MIT
 nvk_files = files(
-  '../../gallium/auxiliary/tgsi/tgsi_from_mesa.c',
   'nvk_acceleration_structure.c',
   'nvk_buffer.c',
   'nvk_buffer.h',
@@ -17,7 +16,6 @@ nvk_files = files(
   'nvk_cmd_meta.c',
   'nvk_cmd_pool.c',
   'nvk_cmd_pool.h',
-  'nvk_codegen.c',
   'nvk_debug.h',
   'nvk_descriptor_set.h',
   'nvk_descriptor_set.c',
@@ -47,6 +45,10 @@ nvk_files = files(
   'nvk_indirect_execution_set.h',
   'nvk_instance.c',
   'nvk_instance.h',
+  'nvk_mem_arena.c',
+  'nvk_mem_arena.h',
+  'nvk_mem_stream.c',
+  'nvk_mem_stream.h',
   'nvk_mme.c',
   'nvk_mme.h',
   'nvk_nir_lower_descriptors.c',
@@ -150,8 +152,7 @@ libnvk = static_library(
     inc_include,
     inc_src,
   ],
-  link_with : [libnouveau_codegen],
-  dependencies : [nvk_deps, idep_nouveau_codegen],
+  dependencies : nvk_deps,
   c_args : [no_override_init_args, nvk_flags],
   gnu_symbol_visibility : 'hidden',
 )
@@ -178,6 +179,7 @@ nouveau_icd = custom_target(
   command : [
     prog_python, '@INPUT0@',
     '--api-version', '1.4', '--xml', '@INPUT1@',
+    '--sizeof-pointer', sizeof_pointer,
     '--lib-path', join_paths(icd_lib_path, icd_file_name),
     '--out', '@OUTPUT@',
   ],
@@ -195,6 +197,7 @@ custom_target(
   command : [
     prog_python, '@INPUT0@',
     '--api-version', '1.4', '--xml', '@INPUT1@',
+    '--sizeof-pointer', sizeof_pointer,
     '--lib-path', meson.current_build_dir() / icd_file_name,
     '--out', '@OUTPUT@',
   ],

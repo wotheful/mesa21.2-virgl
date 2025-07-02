@@ -30,9 +30,9 @@
 #include "pan_cmdstream.h"
 #include "pan_context.h"
 #include "pan_fb_preload.h"
-#include "pan_indirect_dispatch.h"
 #include "pan_jm.h"
 #include "pan_job.h"
+#include "pan_precomp.h"
 
 #if PAN_ARCH >= 10
 #error "JM helpers are only used for gen < 10"
@@ -248,7 +248,7 @@ void
 GENX(jm_preload_fb)(struct panfrost_batch *batch, struct pan_fb_info *fb)
 {
    struct panfrost_device *dev = pan_device(batch->ctx->base.screen);
-   struct panfrost_ptr preload_jobs[2];
+   struct pan_ptr preload_jobs[2];
 
    unsigned preload_job_count =
       GENX(pan_preload_fb)(&dev->fb_preload_cache, &batch->pool.base, fb,
@@ -274,7 +274,7 @@ void
 GENX(jm_emit_fragment_job)(struct panfrost_batch *batch,
                            const struct pan_fb_info *pfb)
 {
-   struct panfrost_ptr transfer =
+   struct pan_ptr transfer =
       pan_pool_alloc_desc(&batch->pool.base, FRAGMENT_JOB);
 
    GENX(pan_emit_fragment_job_payload)
@@ -308,7 +308,7 @@ void
 GENX(jm_launch_grid)(struct panfrost_batch *batch,
                      const struct pipe_grid_info *info)
 {
-   struct panfrost_ptr t = pan_pool_alloc_desc(&batch->pool.base, COMPUTE_JOB);
+   struct pan_ptr t = pan_pool_alloc_desc(&batch->pool.base, COMPUTE_JOB);
 
    /* Invoke according to the grid info */
 
@@ -318,10 +318,10 @@ GENX(jm_launch_grid)(struct panfrost_batch *batch,
       num_wg[0] = num_wg[1] = num_wg[2] = 1;
 
 #if PAN_ARCH <= 7
-   panfrost_pack_work_groups_compute(
-      pan_section_ptr(t.cpu, COMPUTE_JOB, INVOCATION), num_wg[0], num_wg[1],
-      num_wg[2], info->block[0], info->block[1], info->block[2], false,
-      info->indirect != NULL);
+   pan_pack_work_groups_compute(pan_section_ptr(t.cpu, COMPUTE_JOB, INVOCATION),
+                                num_wg[0], num_wg[1], num_wg[2], info->block[0],
+                                info->block[1], info->block[2], false,
+                                info->indirect != NULL);
 
    pan_section_pack(t.cpu, COMPUTE_JOB, PARAMETERS, cfg) {
       cfg.job_task_split = util_logbase2_ceil(info->block[0] + 1) +
@@ -377,27 +377,24 @@ GENX(jm_launch_grid)(struct panfrost_batch *batch,
    unsigned indirect_dep = 0;
 #if PAN_GPU_SUPPORTS_DISPATCH_INDIRECT
    if (info->indirect) {
-      struct panfrost_device *dev = pan_device(batch->ctx->base.screen);
-      struct pan_indirect_dispatch_info indirect = {
-         .job = t.gpu,
-         .indirect_dim = pan_resource(info->indirect)->image.data.base +
-                         info->indirect_offset,
-         .num_wg_sysval =
-            {
-               batch->num_wg_sysval[0],
-               batch->num_wg_sysval[1],
-               batch->num_wg_sysval[2],
-            },
-      };
+      uint64_t indirect_buffer_addr =
+         pan_resource(info->indirect)->plane.base + info->indirect_offset;
 
-      indirect_dep = GENX(pan_indirect_dispatch_emit)(
-         &dev->indirect_dispatch, &batch->pool.base, &batch->jm.jobs.vtc_jc,
-         &indirect);
+      /* We redirect write to memory sink for null pointers */
+      uint64_t num_wg_sysval_x = batch->num_wg_sysval[0] ? batch->num_wg_sysval[0] : 0x8ull << 60;
+      uint64_t num_wg_sysval_y = batch->num_wg_sysval[1] ? batch->num_wg_sysval[1] : 0x8ull << 60;
+      uint64_t num_wg_sysval_z = batch->num_wg_sysval[2] ? batch->num_wg_sysval[2] : 0x8ull << 60;
+      panlib_indirect_dispatch(
+         batch, panlib_1d(1), PANLIB_BARRIER_JM_SUPPRESS_PREFETCH,
+         indirect_buffer_addr, info->block[0], info->block[1], info->block[2],
+         t.gpu, num_wg_sysval_x, num_wg_sysval_y, num_wg_sysval_z);
+      indirect_dep = batch->jm.jobs.vtc_jc.job_index;
    }
 #endif
 
-   pan_jc_add_job(&batch->jm.jobs.vtc_jc, MALI_JOB_TYPE_COMPUTE, true, false,
-                  indirect_dep, 0, &t, false);
+   pan_jc_add_job(&batch->jm.jobs.vtc_jc,
+                  info->indirect ? MALI_JOB_TYPE_NOT_STARTED : MALI_JOB_TYPE_COMPUTE,
+                  true, false, indirect_dep, 0, &t, false);
 }
 
 #if PAN_ARCH >= 6
@@ -411,7 +408,7 @@ jm_emit_tiler_desc(struct panfrost_batch *batch)
    if (tiler_desc)
       return tiler_desc;
 
-   struct panfrost_ptr t = pan_pool_alloc_desc(&batch->pool.base, TILER_HEAP);
+   struct pan_ptr t = pan_pool_alloc_desc(&batch->pool.base, TILER_HEAP);
 
    pan_cast_and_pack(t.cpu, TILER_HEAP, heap) {
       heap.size = panfrost_bo_size(dev->tiler_heap);
@@ -545,7 +542,7 @@ jm_emit_tiler_draw(struct mali_draw_packed *out, struct panfrost_batch *batch,
 
          struct panfrost_resource *rsrc =
             pan_resource(ctx->occlusion_query->rsrc);
-         cfg.occlusion = rsrc->image.data.base;
+         cfg.occlusion = rsrc->plane.base;
          panfrost_batch_write_rsrc(ctx->batch, rsrc, PIPE_SHADER_FRAGMENT);
       }
 
@@ -740,7 +737,7 @@ jm_emit_primitive(struct panfrost_batch *batch,
           * on Valhall, so we don't need to set that here
           */
       } else if (cfg.index_type) {
-         cfg.base_vertex_offset = draw->index_bias - ctx->offset_start;
+         cfg.base_vertex_offset = (int64_t)draw->index_bias - ctx->offset_start;
 
 #if PAN_ARCH <= 7
          cfg.indices = batch->indices;
@@ -867,7 +864,7 @@ void
 GENX(jm_launch_xfb)(struct panfrost_batch *batch,
                     const struct pipe_draw_info *info, unsigned count)
 {
-   struct panfrost_ptr t = pan_pool_alloc_desc(&batch->pool.base, COMPUTE_JOB);
+   struct pan_ptr t = pan_pool_alloc_desc(&batch->pool.base, COMPUTE_JOB);
 
 #if PAN_ARCH == 9
    pan_section_pack(t.cpu, COMPUTE_JOB, PAYLOAD, cfg) {
@@ -895,9 +892,8 @@ GENX(jm_launch_xfb)(struct panfrost_batch *batch,
 #else
    struct mali_invocation_packed invocation;
 
-   panfrost_pack_work_groups_compute(&invocation, 1, count,
-                                     info->instance_count, 1, 1, 1,
-                                     PAN_ARCH <= 5, false);
+   pan_pack_work_groups_compute(&invocation, 1, count, info->instance_count, 1,
+                                1, 1, PAN_ARCH <= 5, false);
 
    /* No varyings on XFB compute jobs. */
    uint64_t saved_vs_varyings = batch->varyings.vs;
@@ -923,8 +919,8 @@ GENX(jm_launch_xfb)(struct panfrost_batch *batch,
  */
 static void
 jm_push_vertex_tiler_jobs(struct panfrost_batch *batch,
-                          const struct panfrost_ptr *vertex_job,
-                          const struct panfrost_ptr *tiler_job)
+                          const struct pan_ptr *vertex_job,
+                          const struct pan_ptr *tiler_job)
 {
    unsigned vertex =
       pan_jc_add_job(&batch->jm.jobs.vtc_jc, MALI_JOB_TYPE_VERTEX, false, false,
@@ -949,9 +945,8 @@ GENX(jm_launch_draw)(struct panfrost_batch *batch,
 #if PAN_ARCH <= 7
    struct mali_invocation_packed invocation;
    if (info->instance_count > 1) {
-      panfrost_pack_work_groups_compute(&invocation, 1, vertex_count,
-                                        info->instance_count, 1, 1, 1, true,
-                                        false);
+      pan_pack_work_groups_compute(&invocation, 1, vertex_count,
+                                   info->instance_count, 1, 1, 1, true, false);
    } else {
       pan_pack(&invocation, INVOCATION, cfg) {
          cfg.invocations = vertex_count - 1;
@@ -967,7 +962,7 @@ GENX(jm_launch_draw)(struct panfrost_batch *batch,
    /* Emit all sort of descriptors. */
 #endif
 
-   UNUSED struct panfrost_ptr tiler, vertex;
+   UNUSED struct pan_ptr tiler, vertex;
 
    if (idvs) {
 #if PAN_ARCH == 9
@@ -1026,11 +1021,10 @@ void
 GENX(jm_emit_write_timestamp)(struct panfrost_batch *batch,
                               struct panfrost_resource *dst, unsigned offset)
 {
-   struct panfrost_ptr job =
-      pan_pool_alloc_desc(&batch->pool.base, WRITE_VALUE_JOB);
+   struct pan_ptr job = pan_pool_alloc_desc(&batch->pool.base, WRITE_VALUE_JOB);
 
    pan_section_pack(job.cpu, WRITE_VALUE_JOB, PAYLOAD, cfg) {
-      cfg.address = dst->image.data.base + dst->image.data.offset + offset;
+      cfg.address = dst->plane.base + offset;
       cfg.type = MALI_WRITE_VALUE_TYPE_SYSTEM_TIMESTAMP;
    }
 

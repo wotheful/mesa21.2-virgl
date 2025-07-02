@@ -8,7 +8,6 @@
 #include "zink_resource.h"
 #include "zink_screen.h"
 #include "zink_state.h"
-#include "zink_surface.h"
 #include "zink_inlines.h"
 
 #include "util/hash_table.h"
@@ -129,7 +128,7 @@ zink_bind_vertex_buffers(struct zink_context *ctx)
          buffers[i] = res->obj->buffer;
          buffer_offsets[i] = vb->buffer_offset;
       } else {
-         buffers[i] = zink_resource(ctx->dummy_vertex_buffer)->obj->buffer;
+         buffers[i] = VK_NULL_HANDLE;
          buffer_offsets[i] = 0;
       }
    }
@@ -689,11 +688,7 @@ zink_draw(struct pipe_context *pctx,
    bool using_depth_bias = zink_prim_type(ctx, dinfo) == MESA_PRIM_TRIANGLES && rast_state->offset_fill;
    if (BATCH_CHANGED || using_depth_bias != ctx->was_using_depth_bias || ctx->depth_bias_changed) {
       if (using_depth_bias) {
-         if (rast_state->base.offset_units_unscaled) {
-            VKCTX(CmdSetDepthBias)(bs->cmdbuf, rast_state->offset_units * ctx->depth_bias_scale_factor, rast_state->offset_clamp, rast_state->offset_scale);
-         } else {
-            VKCTX(CmdSetDepthBias)(bs->cmdbuf, rast_state->offset_units, rast_state->offset_clamp, rast_state->offset_scale);
-         }
+         VKCTX(CmdSetDepthBias)(bs->cmdbuf, rast_state->offset_units, rast_state->offset_clamp, rast_state->offset_scale);
       } else {
          VKCTX(CmdSetDepthBias)(bs->cmdbuf, 0.0f, 0.0f, 0.0f);
       }
@@ -848,12 +843,12 @@ zink_draw(struct pipe_context *pctx,
          bool is_zs = util_format_is_depth_or_stencil(ctx->sampler_views[MESA_SHADER_FRAGMENT][0]->format);
          marker = zink_cmd_debug_marker_begin(ctx, VK_NULL_HANDLE, "u_blitter(%s->%s, %dx%d)",
                                               util_format_short_name(ctx->sampler_views[MESA_SHADER_FRAGMENT][0]->format),
-                                              util_format_short_name((is_zs ? ctx->fb_state.zsbuf : ctx->fb_state.cbufs[0])->format),
+                                              util_format_short_name((is_zs ? ctx->fb_state.zsbuf : ctx->fb_state.cbufs[0]).format),
                                               lround(viewport.width), lround(viewport.height));
       } else {
          marker = zink_cmd_debug_marker_begin(ctx, VK_NULL_HANDLE, "draw(%u cbufs|%s, %dx%d)",
                                               ctx->fb_state.nr_cbufs,
-                                              ctx->fb_state.zsbuf ? "zsbuf" : "",
+                                              ctx->fb_state.zsbuf.texture ? "zsbuf" : "",
                                               lround(viewport.width), lround(viewport.height));
       }
    }
@@ -1071,6 +1066,14 @@ zink_launch_grid(struct pipe_context *pctx, const struct pipe_grid_info *info)
 
    if (BATCH_CHANGED) {
       zink_update_descriptor_refs(ctx, true);
+
+      for (unsigned i = 0; i < info->num_globals; i++) {
+         struct zink_resource *res = zink_resource(info->globals[i]);
+         util_range_add(&res->base.b, &res->valid_buffer_range, 0, res->base.b.width0);
+         zink_batch_reference_resource_rw(ctx, res, true);
+         zink_screen(ctx->base.screen)->buffer_barrier(ctx, res, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+         res->obj->unordered_read = res->obj->unordered_write = false;
+      }
    }
    if (ctx->compute_dirty) {
       /* update inlinable constants */

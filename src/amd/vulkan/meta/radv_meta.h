@@ -67,6 +67,7 @@ struct radv_meta_saved_state {
 
 enum radv_copy_flags {
    RADV_COPY_FLAGS_DEVICE_LOCAL = 1 << 0,
+   RADV_COPY_FLAGS_SPARSE = 1 << 1,
 };
 
 extern const VkFormat radv_fs_key_format_exemplars[NUM_META_FS_KEYS];
@@ -134,6 +135,24 @@ void radv_meta_save(struct radv_meta_saved_state *saved_state, struct radv_cmd_b
 void radv_meta_restore(const struct radv_meta_saved_state *state, struct radv_cmd_buffer *cmd_buffer);
 
 VkImageViewType radv_meta_get_view_type(const struct radv_image *image);
+
+static inline VkFormat
+radv_meta_get_96bit_channel_format(VkFormat format)
+{
+   switch (format) {
+   case VK_FORMAT_R32G32B32_UINT:
+      return VK_FORMAT_R32_UINT;
+      break;
+   case VK_FORMAT_R32G32B32_SINT:
+      return VK_FORMAT_R32_SINT;
+      break;
+   case VK_FORMAT_R32G32B32_SFLOAT:
+      return VK_FORMAT_R32_SFLOAT;
+      break;
+   default:
+      unreachable("invalid R32G32B32 format");
+   }
+}
 
 struct radv_meta_blit2d_surf {
    /** The size of an element in bytes. */
@@ -269,6 +288,8 @@ VkResult radv_meta_get_noop_pipeline_layout(struct radv_device *device, VkPipeli
 void radv_meta_bind_descriptors(struct radv_cmd_buffer *cmd_buffer, VkPipelineBindPoint bind_point,
                                 VkPipelineLayout _layout, uint32_t num_descriptors,
                                 const VkDescriptorGetInfoEXT *descriptors);
+
+enum radv_copy_flags radv_get_copy_flags_from_bo(const struct radeon_winsys_bo *bo);
 
 #ifdef __cplusplus
 }

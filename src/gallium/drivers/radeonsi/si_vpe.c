@@ -33,6 +33,7 @@
 #include <si_pipe.h>
 #include "si_vpe.h"
 #include "gmlib/tonemap_adaptor.h"
+#include "lanczoslib/lanczos_adaptor.h"
 
 #define SI_VPE_LOG_LEVEL_DEFAULT     0
 #define SI_VPE_LOG_LEVEL_INFO        1
@@ -513,7 +514,7 @@ si_vpe_set_color_space(const struct pipe_vpp_desc *process_properties,
 static enum vpe_status
 si_vpe_set_plane_info(struct vpe_video_processor *vpeproc,
                       const struct pipe_vpp_desc *process_properties,
-                      struct pipe_surface **surfaces,
+                      struct pipe_surface *surfaces,
                       int which_surface,
                       struct vpe_surface_info *surface_info)
 {
@@ -533,13 +534,13 @@ si_vpe_set_plane_info(struct vpe_video_processor *vpeproc,
 
    /* Only support 1 plane for RGB formats, and 2 plane format for YUV formats */
    if (util_format_is_yuv(format) && util_format_get_num_planes(format) == 2) {
-      si_tex_0 = (struct si_texture *)surfaces[0]->texture;
-      si_tex_1 = (struct si_texture *)surfaces[1]->texture;
+      si_tex_0 = (struct si_texture *)surfaces[0].texture;
+      si_tex_1 = (struct si_texture *)surfaces[1].texture;
       plane_address->type = VPE_PLN_ADDR_TYPE_VIDEO_PROGRESSIVE;
       plane_address->video_progressive.luma_addr.quad_part = si_tex_0->buffer.gpu_address + si_tex_0->surface.u.gfx9.surf_offset;
       plane_address->video_progressive.chroma_addr.quad_part = si_tex_1->buffer.gpu_address + si_tex_1->surface.u.gfx9.surf_offset;
    } else if (!util_format_is_yuv(format) && util_format_get_num_planes(format) == 1){
-      si_tex_0 = (struct si_texture *)surfaces[0]->texture;
+      si_tex_0 = (struct si_texture *)surfaces[0].texture;
       si_tex_1 = NULL;
       plane_address->type = VPE_PLN_ADDR_TYPE_GRAPHICS;
       plane_address->grph.addr.quad_part = si_tex_0->buffer.gpu_address + si_tex_0->surface.u.gfx9.surf_offset;
@@ -548,7 +549,7 @@ si_vpe_set_plane_info(struct vpe_video_processor *vpeproc,
 
    /* 1st plane ret setting */
    uint16_t width, height;
-   pipe_surface_size(surfaces[0], &width, &height);
+   pipe_surface_size(&surfaces[0], &width, &height);
    plane_size->surface_size.x         = 0;
    plane_size->surface_size.y         = 0;
    plane_size->surface_size.width     = width;
@@ -558,7 +559,7 @@ si_vpe_set_plane_info(struct vpe_video_processor *vpeproc,
 
    /* YUV 2nd plane ret setting */
    if (util_format_get_num_planes(format) == 2) {
-      pipe_surface_size(surfaces[1], &width, &height);
+      pipe_surface_size(&surfaces[1], &width, &height);
       plane_size->chroma_size.x         = 0;
       plane_size->chroma_size.y         = 0;
       plane_size->chroma_size.width     = width;
@@ -576,7 +577,7 @@ si_vpe_set_plane_info(struct vpe_video_processor *vpeproc,
 static enum vpe_status
 si_vpe_set_surface_info(struct vpe_video_processor *vpeproc,
                         const struct pipe_vpp_desc *process_properties,
-                        struct pipe_surface **surfaces,
+                        struct pipe_surface *surfaces,
                         int which_surface,
                         struct vpe_surface_info *surface_info)
 {
@@ -586,7 +587,7 @@ si_vpe_set_surface_info(struct vpe_video_processor *vpeproc,
    if (VPE_STATUS_OK != si_vpe_set_plane_info(vpeproc, process_properties, surfaces, which_surface, surface_info))
       return VPE_STATUS_NOT_SUPPORTED;
 
-   struct si_texture *tex = (struct si_texture *)surfaces[0]->texture;
+   struct si_texture *tex = (struct si_texture *)surfaces[0].texture;
    surface_info->swizzle               = tex->surface.u.gfx9.swizzle_mode;
 
    /* DCC not supported */
@@ -605,6 +606,93 @@ si_vpe_set_surface_info(struct vpe_video_processor *vpeproc,
    return VPE_STATUS_OK;
 }
 
+static bool
+si_vpe_reuse_scaling_info(struct vpe_video_processor *vpeproc,
+                          struct vpe_stream *stream,
+                          float *scaling_ratios)
+{
+   if (vpeproc->lanczos_info) {
+      uint8_t scaling_pass_num = (vpeproc->geometric_passes)? vpeproc->geometric_passes : 1;
+      struct vpe_scaling_lanczos_info *lanczof = vpeproc->lanczos_info;
+      uint8_t idx;
+
+      for (idx = 0; idx < scaling_pass_num; idx++) {
+         if (lanczof[idx].scaling_ratios[0] == 0 && lanczof[idx].scaling_ratios[1] == 0)
+            break;
+         else if (lanczof[idx].scaling_ratios[0] == scaling_ratios[0] &&
+                  lanczof[idx].scaling_ratios[1] == scaling_ratios[1]) {
+            SIVPE_INFO(vpeproc->log_level, "Reuse Scaling Coeff from array[%d]\n", idx);
+            memcpy(&stream->polyphase_scaling_coeffs,
+                   &lanczof[idx].filterCoeffs,
+                   sizeof(struct vpe_scaling_filter_coeffs));
+            stream->use_external_scaling_coeffs = true;
+            stream->scaling_info.taps.h_taps = stream->polyphase_scaling_coeffs.taps.h_taps;
+            stream->scaling_info.taps.v_taps = stream->polyphase_scaling_coeffs.taps.v_taps;
+            stream->scaling_info.taps.h_taps_c = stream->polyphase_scaling_coeffs.taps.h_taps_c;
+            stream->scaling_info.taps.v_taps_c = stream->polyphase_scaling_coeffs.taps.v_taps_c;
+            return true;
+         } else {
+            SIVPE_DBG(vpeproc->log_level, "Scaling Coeff in array[%d] is not match\n", idx);
+         }
+      }
+   }
+
+   return false;
+}
+
+static void
+si_vpe_init_polyphase_filter(struct vpe_video_processor *vpeproc,
+                             struct vpe_stream *stream,
+                             float *scaling_ratios)
+{
+   uint32_t hw_num_taps[2] = {4, 4};
+   uint32_t hTaps = stream->scaling_info.taps.h_taps;
+   uint32_t vTaps = stream->scaling_info.taps.v_taps;
+   uint32_t hw_num_phases = 64;
+   uint8_t scaling_pass_num = (vpeproc->geometric_passes)? vpeproc->geometric_passes : 1;
+
+   if (hTaps > 0)
+      hw_num_taps[0] = hTaps;
+   if (vTaps > 0)
+      hw_num_taps[1] = vTaps;
+
+   stream->use_external_scaling_coeffs = true;
+   stream->polyphase_scaling_coeffs.taps.h_taps = hw_num_taps[0];
+   stream->polyphase_scaling_coeffs.taps.v_taps = hw_num_taps[1];
+   stream->polyphase_scaling_coeffs.taps.h_taps_c = 2;
+   stream->polyphase_scaling_coeffs.taps.v_taps_c = 2;
+   stream->polyphase_scaling_coeffs.nb_phases = hw_num_phases;
+
+   if (scaling_ratios[0] > 0)
+      generate_lanczos_coeff(scaling_ratios[0], hw_num_taps[0], hw_num_phases, stream->polyphase_scaling_coeffs.horiz_polyphase_coeffs);
+
+   if (scaling_ratios[1] > 0)
+      generate_lanczos_coeff(scaling_ratios[1], hw_num_taps[1], hw_num_phases, stream->polyphase_scaling_coeffs.vert_polyphase_coeffs);
+
+   /* backup the scaling ratio and coeff info for re-using in next round */
+   if (!vpeproc->lanczos_info)
+      vpeproc->lanczos_info = (struct vpe_scaling_lanczos_info *)CALLOC(scaling_pass_num, sizeof(struct vpe_scaling_lanczos_info));
+
+   if (vpeproc->lanczos_info) {
+      struct vpe_scaling_lanczos_info *lanczof = vpeproc->lanczos_info;
+      uint8_t idx;
+
+      for (idx = 0; idx < scaling_pass_num; idx++) {
+         if (lanczof[idx].scaling_ratios[0] == 0 && lanczof[idx].scaling_ratios[1] == 0) {
+            lanczof[idx].scaling_ratios[0] = scaling_ratios[0];
+            lanczof[idx].scaling_ratios[1] = scaling_ratios[1];
+            memcpy(&lanczof[idx].filterCoeffs,
+                   &stream->polyphase_scaling_coeffs,
+                   sizeof(struct vpe_scaling_filter_coeffs));
+            SIVPE_INFO(vpeproc->log_level, "Backup Scaling Coeff into to array[%d]\n", idx);
+            break;
+         }
+      }
+      if (idx == scaling_pass_num)
+         SIVPE_INFO(vpeproc->log_level, "Backup Scaling Coeff failed\n");
+   }
+}
+
 static void
 si_vpe_set_stream_in_param(struct vpe_video_processor *vpeproc,
                            const struct pipe_vpp_desc *process_properties,
@@ -614,6 +702,7 @@ si_vpe_set_stream_in_param(struct vpe_video_processor *vpeproc,
    struct vpe_scaling_info *scaling_info = &stream->scaling_info;
    struct vpe_blend_info *blend_info     = &stream->blend_info;
    struct vpe_color_adjust *color_adj    = &stream->color_adj;
+   float scaling_ratios[2] = { 1.0, 1.0 };
 
    /* Init: scaling_info */
    scaling_info->src_rect.x            = process_properties->src_region.x0;
@@ -629,7 +718,19 @@ si_vpe_set_stream_in_param(struct vpe_video_processor *vpeproc,
    scaling_info->taps.v_taps_c         = 2;
    scaling_info->taps.h_taps_c         = 2;
 
-   vpe_get_optimal_num_of_taps(vpe_handle, scaling_info);
+   /* Get current scaling ratio */
+   if (stream->scaling_info.dst_rect.width > 1)
+      scaling_ratios[0] = (float)stream->scaling_info.src_rect.width / (float)stream->scaling_info.dst_rect.width;
+   if (stream->scaling_info.dst_rect.height > 1)
+      scaling_ratios[1] = (float)stream->scaling_info.src_rect.height / (float)stream->scaling_info.dst_rect.height;
+
+   if (!si_vpe_reuse_scaling_info(vpeproc, stream, scaling_ratios)) {
+      /* Failed to reuse scaling info,
+       * it means the new scaling coeff have to be generated
+       */
+      vpe_get_optimal_num_of_taps(vpe_handle, scaling_info);
+      si_vpe_init_polyphase_filter(vpeproc, stream, scaling_ratios);
+   }
 
    blend_info->blending                = false;
    blend_info->pre_multiplied_alpha    = false;
@@ -691,8 +792,8 @@ si_vpe_set_stream_out_param(struct vpe_video_processor *vpeproc,
    if (process_properties->background_color) {
       build_param->target_rect.x      = 0;
       build_param->target_rect.y      = 0;
-      build_param->target_rect.width  = pipe_surface_width(vpeproc->dst_surfaces[0]);
-      build_param->target_rect.height = pipe_surface_height(vpeproc->dst_surfaces[0]);
+      build_param->target_rect.width  = pipe_surface_width(&vpeproc->dst_surfaces[0]);
+      build_param->target_rect.height = pipe_surface_height(&vpeproc->dst_surfaces[0]);
    } else {
       build_param->target_rect.x      = process_properties->dst_region.x0;
       build_param->target_rect.y      = process_properties->dst_region.y0;
@@ -706,13 +807,7 @@ si_vpe_set_stream_out_param(struct vpe_video_processor *vpeproc,
    build_param->bg_color.rgba.b    = 0;
    build_param->bg_color.rgba.a    = 0;
 
-   /* Studio color range not start from 0 */
-   if (!(background_color & 0xFFFFFF) && (build_param->dst_surface.cs.range == VPE_COLOR_RANGE_STUDIO)) {
-      build_param->bg_color.rgba.a = (float)((background_color & 0xFF000000) >> 24) / 255.0;
-      build_param->bg_color.rgba.r = 0.0628;
-      build_param->bg_color.rgba.g = 0.0628;
-      build_param->bg_color.rgba.b = 0.0628;
-   } else if (process_properties->background_color) {
+   if (process_properties->background_color) {
       build_param->bg_color.rgba.a = (float)((background_color & 0xFF000000) >> 24) / 255.0;
       build_param->bg_color.rgba.r = (float)((background_color & 0x00FF0000) >> 16) / 255.0;
       build_param->bg_color.rgba.g = (float)((background_color & 0x0000FF00) >>  8) / 255.0;
@@ -856,6 +951,9 @@ si_vpe_processor_destroy(struct pipe_video_codec *codec)
    if (vpeproc->geometric_scaling_ratios)
       FREE(vpeproc->geometric_scaling_ratios);
 
+   if (vpeproc->lanczos_info)
+      FREE(vpeproc->lanczos_info);
+
    if (vpeproc->geometric_buf[0])
       vpeproc->geometric_buf[0]->destroy(vpeproc->geometric_buf[0]);
 
@@ -874,30 +972,26 @@ si_vpe_processor_begin_frame(struct pipe_video_codec *codec,
                              struct pipe_picture_desc *picture)
 {
    struct vpe_video_processor *vpeproc = (struct vpe_video_processor *)codec;
-   struct pipe_surface **dst_surfaces;
+   struct pipe_surface *dst_surfaces;
    assert(codec);
 
    dst_surfaces = target->get_surfaces(target);
-   if (!dst_surfaces || !dst_surfaces[0]) {
-      SIVPE_ERR("Get target surface failed\n");
-      return;
-   }
-   vpeproc->dst_surfaces = dst_surfaces;
+   memcpy(vpeproc->dst_surfaces, dst_surfaces, sizeof(vpeproc->dst_surfaces));
 }
 
 static void
 si_vpe_cs_add_surface_buffer(struct vpe_video_processor *vpeproc,
-                             struct pipe_surface **surfaces,
+                             struct pipe_surface *surfaces,
                              unsigned usage)
 {
    struct si_resource *si_res;
    int i;
 
    for (i = 0; i < VL_MAX_SURFACES; ++i) {
-      if (!surfaces[i])
+      if (!surfaces[i].texture)
          continue;
 
-      si_res = si_resource(surfaces[i]->texture);
+      si_res = si_resource(surfaces[i].texture);
       vpeproc->ws->cs_add_buffer(&vpeproc->cs, si_res->buf, usage | RADEON_USAGE_SYNCHRONIZED, 0);
    }
 }
@@ -989,8 +1083,8 @@ si_vpe_show_process_settings(struct vpe_video_processor *vpeproc,
 static enum vpe_status
 si_vpe_processor_check_and_build_settins(struct vpe_video_processor *vpeproc,
                                          const struct pipe_vpp_desc *process_properties,
-                                         struct pipe_surface **src_surfaces,
-                                         struct pipe_surface **dst_surfaces)
+                                         struct pipe_surface *src_surfaces,
+                                         struct pipe_surface *dst_surfaces)
 {
    enum vpe_status result = VPE_STATUS_OK;
    struct vpe *vpe_handle = vpeproc->vpe_handle;
@@ -1011,7 +1105,7 @@ si_vpe_processor_check_and_build_settins(struct vpe_video_processor *vpeproc,
                                     USE_SRC_SURFACE,
                                     &build_param->streams[0].surface_info);
    if (VPE_STATUS_OK != result) {
-      SIVPE_ERR("Set Src surface failed with result: %d\n", result);
+      SIVPE_WARN(vpeproc->log_level, "Set Src surface failed with result: %d\n", result);
       return result;
    }
 
@@ -1028,7 +1122,7 @@ si_vpe_processor_check_and_build_settins(struct vpe_video_processor *vpeproc,
                                     USE_DST_SURFACE,
                                     &build_param->dst_surface);
    if (VPE_STATUS_OK != result) {
-      SIVPE_ERR("Set Dst surface failed with result: %d\n", result);
+      SIVPE_WARN(vpeproc->log_level, "Set Dst surface failed with result: %d\n", result);
       return result;
    }
 
@@ -1073,8 +1167,8 @@ si_vpe_processor_check_and_build_settins(struct vpe_video_processor *vpeproc,
 static enum vpe_status
 si_vpe_construct_blt(struct vpe_video_processor *vpeproc,
                      const struct pipe_vpp_desc *process_properties,
-                     struct pipe_surface **src_surfaces,
-                     struct pipe_surface **dst_surfaces)
+                     struct pipe_surface *src_surfaces,
+                     struct pipe_surface *dst_surfaces)
 {
    enum vpe_status result = VPE_STATUS_OK;
    struct vpe *vpe_handle = vpeproc->vpe_handle;
@@ -1092,7 +1186,6 @@ si_vpe_construct_blt(struct vpe_video_processor *vpeproc,
     */
    result = si_vpe_processor_check_and_build_settins(vpeproc, process_properties, src_surfaces, dst_surfaces);
    if (VPE_STATUS_OK != result) {
-      SIVPE_ERR("Failed in checking process operation and build settings(%d)\n", result);
       return result;
    }
 
@@ -1251,15 +1344,11 @@ si_vpe_processor_process_frame(struct pipe_video_codec *codec,
    enum vpe_status result;
 
    /* Variables for allocating temp working buffer */
-   struct pipe_surface **tmp_geo_scaling_surf_1;
-   struct pipe_surface **tmp_geo_scaling_surf_2;
+   struct pipe_surface *tmp_geo_scaling_surf_1;
+   struct pipe_surface *tmp_geo_scaling_surf_2;
 
    /* Get input surface */
-   vpeproc->src_surfaces = input_texture->get_surfaces(input_texture);
-   if (!vpeproc->src_surfaces || !vpeproc->src_surfaces[0]) {
-      SIVPE_ERR("Get source surface failed\n");
-      return 1;
-   }
+   memcpy(vpeproc->src_surfaces, input_texture->get_surfaces(input_texture), sizeof(vpeproc->src_surfaces));
 
    /* Get scaling ratio info */
    src_rect_width  = process_properties->src_region.x1 - process_properties->src_region.x0;
@@ -1297,7 +1386,7 @@ si_vpe_processor_process_frame(struct pipe_video_codec *codec,
    /* Geometric Scaling #1: decide how many passes and scaling ratios in each pass */
    result = si_vpe_decide_substage_scal_ratios(vpeproc, scaling_ratio);
    if (VPE_STATUS_OK != result) {
-      SIVPE_ERR("Failed in deciding geometric scaling ratios\n");
+      SIVPE_WARN(vpeproc->log_level, "Failed in deciding geometric scaling ratios\n");
       return result;
    }
    pHrSr = vpeproc->geometric_scaling_ratios;
@@ -1305,7 +1394,7 @@ si_vpe_processor_process_frame(struct pipe_video_codec *codec,
 
    /* Geometric Scaling #2: Allocate working frame buffer of geometric scaling */
    if (!vpeproc->geometric_buf[0] || !vpeproc->geometric_buf[1]) {
-      struct si_texture *dst_tex = (struct si_texture *)vpeproc->dst_surfaces[0]->texture;
+      struct si_texture *dst_tex = (struct si_texture *)vpeproc->dst_surfaces[0].texture;
       struct pipe_video_buffer templat;
 
       if (vpeproc->geometric_buf[0])
@@ -1339,9 +1428,9 @@ si_vpe_processor_process_frame(struct pipe_video_codec *codec,
    if (vpeproc->geometric_passes > 1) {
       struct pipe_vpp_desc process_geoscl;
       struct u_rect *src_region, *dst_region;
-      struct pipe_surface **src_surfaces;
-      struct pipe_surface **dst_surfaces;
-      struct pipe_surface **tmp_surfaces;
+      struct pipe_surface *src_surfaces;
+      struct pipe_surface *dst_surfaces;
+      struct pipe_surface *tmp_surfaces;
 
       src_region = &process_geoscl.src_region;
       dst_region = &process_geoscl.dst_region;
@@ -1388,8 +1477,6 @@ si_vpe_processor_process_frame(struct pipe_video_codec *codec,
 
       result = si_vpe_construct_blt(vpeproc, &process_geoscl, src_surfaces, dst_surfaces);
       if (VPE_STATUS_OK != result) {
-         pipe_surface_reference(tmp_geo_scaling_surf_1, NULL);
-         pipe_surface_reference(tmp_geo_scaling_surf_2, NULL);
          SIVPE_ERR("Failed in Geometric Scaling first blt command\n");
          return result;
       }
@@ -1424,8 +1511,6 @@ si_vpe_processor_process_frame(struct pipe_video_codec *codec,
 
          result = si_vpe_construct_blt(vpeproc, &process_geoscl, src_surfaces, dst_surfaces);
          if (VPE_STATUS_OK != result) {
-            pipe_surface_reference(tmp_geo_scaling_surf_1, NULL);
-            pipe_surface_reference(tmp_geo_scaling_surf_2, NULL);
             SIVPE_ERR("Failed in Geometric Scaling first blt command\n");
             return result;
          }
@@ -1450,8 +1535,6 @@ si_vpe_processor_process_frame(struct pipe_video_codec *codec,
       dst_surfaces = vpeproc->dst_surfaces;
       result = si_vpe_construct_blt(vpeproc, &process_geoscl, src_surfaces, dst_surfaces);
       if (VPE_STATUS_OK != result) {
-         pipe_surface_reference(tmp_geo_scaling_surf_1, NULL);
-         pipe_surface_reference(tmp_geo_scaling_surf_2, NULL);
          SIVPE_ERR("Failed in Geometric Scaling first blt command\n");
          return result;
       }

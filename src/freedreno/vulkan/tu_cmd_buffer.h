@@ -444,6 +444,7 @@ struct tu_cmd_state
 
    uint32_t max_vbs_bound;
 
+   bool has_fdm;
    bool per_view_viewport;
 
    /* saved states to re-emit in TU_CMD_DIRTY_DRAW_STATE case */
@@ -521,6 +522,7 @@ struct tu_cmd_state
    bool disable_fs;
    bool stencil_front_write;
    bool stencil_back_write;
+   bool stencil_written_on_depth_fail;
    bool pipeline_sysmem_single_prim_mode;
    bool pipeline_has_tess;
    bool pipeline_disable_gmem;
@@ -542,6 +544,8 @@ struct tu_cmd_state
    uint32_t prim_counters_running;
 
    bool prim_generated_query_running_before_rp;
+
+   bool occlusion_query_may_be_running;
 
    enum tu_suspend_resume_state suspend_resume;
 
@@ -568,9 +572,8 @@ struct tu_cmd_buffer
 
    struct tu_device *device;
 
-   struct u_trace trace;
    struct u_trace_iterator trace_renderpass_start;
-   struct u_trace_iterator trace_renderpass_end;
+   struct u_trace trace, rp_trace;
 
    struct list_head renderpass_autotune_results;
    struct tu_autotune_results_buffer* autotune_buffer;
@@ -627,7 +630,7 @@ struct tu_cmd_buffer
       bool fdm_offset;
       VkOffset2D fdm_offsets[MAX_VIEWS];
 
-      struct u_trace_iterator trace_renderpass_start, trace_renderpass_end;
+      struct u_trace rp_trace;
 
       struct tu_render_pass_state state;
 

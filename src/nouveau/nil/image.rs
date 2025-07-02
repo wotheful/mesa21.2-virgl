@@ -8,7 +8,7 @@ use crate::tiling::Tiling;
 use crate::Minify;
 
 use nil_rs_bindings::*;
-use nvidia_headers::classes::{cl9097, clc597};
+use nvidia_headers::classes::{cl9097, cla097, clb197, clc597, clcd97};
 
 use std::panic;
 
@@ -225,7 +225,7 @@ impl Image {
     }
 
     fn new_linear(
-        _dev: &nil_rs_bindings::nv_device_info,
+        dev: &nil_rs_bindings::nv_device_info,
         info: &ImageInitInfo,
     ) -> Self {
         // Linear images need to be 2D
@@ -238,7 +238,7 @@ impl Image {
         assert!(info.samples == 1);
         let sample_layout = SampleLayout::_1x1;
 
-        let align_B = if info.explicit_row_stride_B > 0 {
+        let mut align_B = if info.explicit_row_stride_B > 0 {
             // If we're importing an image, allow smaller stride and offset
             // alignments.  The texture headers can handle as low as 32B-aligned
             // and NVK has workarounds for rendering if needed.
@@ -251,12 +251,19 @@ impl Image {
             128
         };
 
+        // Kepler image storage needs 256B-aligned addresses.
+        if dev.cls_eng3d >= cla097::KEPLER_A
+            && dev.cls_eng3d < clb197::MAXWELL_B
+        {
+            align_B = align_B.max(256);
+        }
+
         let extent_B = info.extent_px.to_B(info.format, sample_layout);
         let row_stride_B = if info.explicit_row_stride_B > 0 {
             debug_assert!(info.explicit_row_stride_B % align_B == 0);
             info.explicit_row_stride_B
         } else {
-            extent_B.width.next_multiple_of(128)
+            extent_B.width.next_multiple_of(align_B)
         };
         let level0 = ImageLevel {
             offset_B: 0,
@@ -310,10 +317,11 @@ impl Image {
                 .clamp(info.extent_px.to_B(info.format, sample_layout))
         } else if (info.usage & IMAGE_USAGE_SPARSE_RESIDENCY_BIT) != 0 {
             assert!((info.usage & IMAGE_USAGE_VIDEO_BIT) == 0);
-            Tiling::sparse(info.format, info.dim)
+            Tiling::sparse(dev, info.format, info.dim)
         } else if (info.usage & IMAGE_USAGE_VIDEO_BIT) != 0 {
             assert!((info.usage & IMAGE_USAGE_SPARSE_RESIDENCY_BIT) == 0);
             let mut min_tiling = Tiling::choose(
+                dev,
                 info.extent_px,
                 info.format,
                 sample_layout,
@@ -322,6 +330,7 @@ impl Image {
             );
             for p in 0..infos.len() {
                 let plane_tiling = Tiling::choose(
+                    dev,
                     infos[p].extent_px,
                     infos[p].format,
                     sample_layout,
@@ -338,6 +347,7 @@ impl Image {
             min_tiling
         } else {
             Tiling::choose(
+                dev,
                 info.extent_px,
                 info.format,
                 sample_layout,
@@ -732,13 +742,20 @@ impl Image {
         samples: u32,
         compressed: bool,
     ) -> u8 {
-        if dev.cls_eng3d >= clc597::TURING_A {
+        if dev.cls_eng3d >= clcd97::BLACKWELL_A {
+            Self::gb202_choose_pte_kind(format, compressed)
+        } else if dev.cls_eng3d >= clc597::TURING_A {
             Self::tu102_choose_pte_kind(format, compressed)
         } else if dev.cls_eng3d >= cl9097::FERMI_A {
             Self::nvc0_choose_pte_kind(format, samples, compressed)
         } else {
             panic!("Unsupported 3d engine class")
         }
+    }
+
+    fn gb202_choose_pte_kind(_format: Format, _compressed: bool) -> u8 {
+        use nvidia_headers::hwref::tu102::mmu::*;
+        return NV_MMU_PTE_KIND_GENERIC_MEMORY.try_into().unwrap();
     }
 
     fn tu102_choose_pte_kind(format: Format, compressed: bool) -> u8 {

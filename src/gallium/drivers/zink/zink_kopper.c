@@ -154,6 +154,7 @@ destroy_swapchain(struct zink_screen *screen, struct kopper_swapchain *cswap)
       util_dynarray_append(&screen->semaphores, VkSemaphore, cswap->images[i].acquire);
       simple_mtx_unlock(&screen->semaphores_lock);
       pipe_resource_reference(&cswap->images[i].readback, NULL);
+      zink_destroy_resource_surface_cache(screen, &cswap->images[i].surface_cache, false);
    }
    free(cswap->images);
    hash_table_foreach(cswap->presents, he) {
@@ -367,8 +368,10 @@ kopper_GetSwapchainImages(struct zink_screen *screen, struct kopper_swapchain *c
    error = VKSCR(GetSwapchainImagesKHR)(screen->dev, cswap->swapchain, &cswap->num_images, images);
    assert(cswap->num_images <= ARRAY_SIZE(images));
    if (zink_screen_handle_vkresult(screen, error)) {
-      for (unsigned i = 0; i < cswap->num_images; i++)
+      for (unsigned i = 0; i < cswap->num_images; i++) {
          cswap->images[i].image = images[i];
+         _mesa_set_init(&cswap->images[i].surface_cache, NULL, NULL, equals_surface_key);
+      }
    }
    cswap->max_acquires = cswap->num_images - cswap->scci.minImageCount + 1;
    return error;
@@ -1113,19 +1116,18 @@ void
 zink_kopper_fixup_depth_buffer(struct zink_context *ctx)
 {
    struct zink_screen *screen = zink_screen(ctx->base.screen);
-   if (!ctx->fb_state.zsbuf)
+   if (!ctx->fb_state.zsbuf.texture)
       return;
 
-   assert(ctx->fb_state.zsbuf->texture->bind & PIPE_BIND_DISPLAY_TARGET);
+   assert(ctx->fb_state.zsbuf.texture->bind & PIPE_BIND_DISPLAY_TARGET);
 
-   struct zink_resource *res = zink_resource(ctx->fb_state.zsbuf->texture);
-   struct zink_surface *surf = zink_csurface(ctx->fb_state.zsbuf);
-   struct zink_ctx_surface *csurf = (struct zink_ctx_surface*)ctx->fb_state.zsbuf;
-   if (surf->info.width == ctx->fb_state.width &&
-       surf->info.height == ctx->fb_state.height)
+   struct zink_resource *res = zink_resource(ctx->fb_state.zsbuf.texture);
+   unsigned width = pipe_surface_width(&ctx->fb_state.zsbuf);
+   unsigned height = pipe_surface_height(&ctx->fb_state.zsbuf);
+   if (width >= ctx->fb_state.width && height >= ctx->fb_state.height)
       return;
 
-   struct pipe_resource templ = *ctx->fb_state.zsbuf->texture;
+   struct pipe_resource templ = *ctx->fb_state.zsbuf.texture;
    templ.width0 = ctx->fb_state.width;
    templ.height0 = ctx->fb_state.height;
    struct pipe_resource *pz = screen->base.resource_create(&screen->base, &templ);
@@ -1134,13 +1136,6 @@ zink_kopper_fixup_depth_buffer(struct zink_context *ctx)
    res->base.b.width0 = ctx->fb_state.width;
    res->base.b.height0 = ctx->fb_state.height;
    pipe_resource_reference(&pz, NULL);
-
-   struct pipe_surface *psurf = ctx->base.create_surface(&ctx->base, &res->base.b, ctx->fb_state.zsbuf);
-   struct zink_ctx_surface *cz = (struct zink_ctx_surface*)psurf;
-
-   /* oh god why */
-   zink_surface_reference(screen, &csurf->surf, cz->surf);
-   pipe_surface_release(&ctx->base, &psurf);
 }
 
 bool

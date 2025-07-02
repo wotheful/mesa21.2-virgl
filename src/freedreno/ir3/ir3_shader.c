@@ -152,8 +152,6 @@ ir3_shader_assemble(struct ir3_shader_variant *v)
    if (v->constant_data_size)
       memcpy(&bin[info->constant_data_offset / 4], v->constant_data,
              v->constant_data_size);
-   ralloc_free(v->constant_data);
-   v->constant_data = NULL;
 
    /* NOTE: if relative addressing is used, we set constlen in
     * the compiler (to worst-case value) since we don't know in
@@ -551,7 +549,7 @@ alloc_variant(struct ir3_shader *shader, const struct ir3_shader_key *key,
    }
 
    v->num_ssbos = info->num_ssbos;
-   v->num_ibos = info->num_ssbos + info->num_images;
+   v->num_uavs = info->num_ssbos + info->num_images;
    v->shader_options = shader->options;
 
    if (!v->binning_pass) {

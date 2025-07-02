@@ -757,44 +757,6 @@ fail:
         return NULL;
 }
 
-static struct pipe_surface *
-vc4_create_surface(struct pipe_context *pctx,
-                   struct pipe_resource *ptex,
-                   const struct pipe_surface *surf_tmpl)
-{
-        struct vc4_surface *surface = CALLOC_STRUCT(vc4_surface);
-        struct vc4_resource *rsc = vc4_resource(ptex);
-
-        if (!surface)
-                return NULL;
-
-        assert(surf_tmpl->u.tex.first_layer == surf_tmpl->u.tex.last_layer);
-
-        struct pipe_surface *psurf = &surface->base;
-        unsigned level = surf_tmpl->u.tex.level;
-
-        pipe_reference_init(&psurf->reference, 1);
-        pipe_resource_reference(&psurf->texture, ptex);
-
-        psurf->context = pctx;
-        psurf->format = surf_tmpl->format;
-        psurf->u.tex.level = level;
-        psurf->u.tex.first_layer = surf_tmpl->u.tex.first_layer;
-        psurf->u.tex.last_layer = surf_tmpl->u.tex.last_layer;
-        surface->offset = (rsc->slices[level].offset +
-                           psurf->u.tex.first_layer * rsc->cube_map_stride);
-        surface->tiling = rsc->slices[level].tiling;
-
-        return &surface->base;
-}
-
-static void
-vc4_surface_destroy(struct pipe_context *pctx, struct pipe_surface *psurf)
-{
-        pipe_resource_reference(&psurf->texture, NULL);
-        FREE(psurf);
-}
-
 static void
 vc4_dump_surface_non_msaa(struct pipe_surface *psurf)
 {
@@ -1240,8 +1202,6 @@ vc4_resource_context_init(struct pipe_context *pctx)
         pctx->texture_unmap = u_transfer_helper_transfer_unmap;
         pctx->buffer_subdata = u_default_buffer_subdata;
         pctx->texture_subdata = vc4_texture_subdata;
-        pctx->create_surface = vc4_create_surface;
-        pctx->surface_destroy = vc4_surface_destroy;
         pctx->resource_copy_region = util_resource_copy_region;
         pctx->blit = vc4_blit;
         pctx->flush_resource = vc4_flush_resource;

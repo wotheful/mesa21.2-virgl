@@ -1125,6 +1125,8 @@ vn_QueueSubmit(VkQueue queue,
 {
    VN_TRACE_FUNC();
 
+   vn_tls_set_async_pipeline_create();
+
    struct vn_queue_submission submit = {
       .batch_type = VK_STRUCTURE_TYPE_SUBMIT_INFO,
       .queue_handle = queue,
@@ -1143,6 +1145,8 @@ vn_QueueSubmit2(VkQueue queue,
                 VkFence fence)
 {
    VN_TRACE_FUNC();
+
+   vn_tls_set_async_pipeline_create();
 
    struct vn_queue_submission submit = {
       .batch_type = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
@@ -1425,17 +1429,6 @@ vn_fence_init_payloads(struct vn_device *dev,
    fence->payload = &fence->permanent;
 
    return VK_SUCCESS;
-}
-
-void
-vn_fence_signal_wsi(struct vn_device *dev, struct vn_fence *fence)
-{
-   struct vn_sync_payload *temp = &fence->temporary;
-
-   vn_sync_payload_release(dev, temp);
-   temp->type = VN_SYNC_TYPE_IMPORTED_SYNC_FD;
-   temp->fd = -1;
-   fence->payload = temp;
 }
 
 static VkResult
@@ -1906,17 +1899,6 @@ vn_semaphore_wait_external(struct vn_device *dev, struct vn_semaphore *sem)
    sem->payload = &sem->permanent;
 
    return true;
-}
-
-void
-vn_semaphore_signal_wsi(struct vn_device *dev, struct vn_semaphore *sem)
-{
-   struct vn_sync_payload *temp = &sem->temporary;
-
-   vn_sync_payload_release(dev, temp);
-   temp->type = VN_SYNC_TYPE_IMPORTED_SYNC_FD;
-   temp->fd = -1;
-   sem->payload = temp;
 }
 
 struct vn_semaphore_feedback_cmd *

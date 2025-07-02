@@ -108,7 +108,7 @@ cmd_get_push_desc_set(struct vk_command_buffer *vk_cmdbuf,
    return set;
 }
 
-#if PAN_ARCH <= 7
+#if PAN_ARCH < 9
 VkResult
 panvk_per_arch(cmd_prepare_dyn_ssbos)(
    struct panvk_cmd_buffer *cmdbuf,
@@ -121,7 +121,7 @@ panvk_per_arch(cmd_prepare_dyn_ssbos)(
    if (!shader || !shader->desc_info.dyn_ssbos.count)
       return VK_SUCCESS;
 
-   struct panfrost_ptr ptr = panvk_cmd_alloc_dev_mem(
+   struct pan_ptr ptr = panvk_cmd_alloc_dev_mem(
       cmdbuf, desc, shader->desc_info.dyn_ssbos.count * PANVK_DESCRIPTOR_SIZE,
       PANVK_DESCRIPTOR_SIZE);
    if (!ptr.gpu)
@@ -200,7 +200,7 @@ panvk_per_arch(cmd_prepare_shader_desc_tables)(
       if (!desc_count)
          continue;
 
-      struct panfrost_ptr ptr = panvk_cmd_alloc_dev_mem(
+      struct pan_ptr ptr = panvk_cmd_alloc_dev_mem(
          cmdbuf, desc, desc_count * desc_size, PANVK_DESCRIPTOR_SIZE);
       if (!ptr.gpu)
          return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -228,7 +228,7 @@ panvk_per_arch(cmd_prepare_shader_desc_tables)(
       shader->desc_info.others.count[PANVK_BIFROST_DESC_TABLE_SAMPLER];
 
    if (tex_count && !sampler_count) {
-      struct panfrost_ptr sampler = panvk_cmd_alloc_desc(cmdbuf, SAMPLER);
+      struct pan_ptr sampler = panvk_cmd_alloc_desc(cmdbuf, SAMPLER);
       if (!sampler.gpu)
          return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
@@ -282,8 +282,9 @@ panvk_per_arch(cmd_prepare_shader_res_table)(
    }
 
    uint32_t first_unused_set = util_last_bit(shader->desc_info.used_set_mask);
-   uint32_t res_count = 1 + first_unused_set;
-   struct panfrost_ptr ptr =
+   uint32_t res_count =
+      ALIGN_POT(1 + first_unused_set, MALI_RESOURCE_TABLE_SIZE_ALIGNMENT);
+   struct pan_ptr ptr =
       panvk_cmd_alloc_desc_array(cmdbuf, res_count * repeat_count, RESOURCE);
    if (!ptr.gpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -317,8 +318,15 @@ panvk_per_arch(cmd_prepare_shader_res_table)(
             }
          }
       }
+      for (uint32_t i = first_unused_set + 1; i < res_count; i++) {
+         pan_pack(&res_table[i], RESOURCE, cfg) {
+            cfg.address = 0;
+            cfg.contains_descriptors = false;
+            cfg.size = 0;
+         }
+      }
 
-      res_table += first_unused_set + 1;
+      res_table += res_count;
    }
 
    shader_desc_state->res_table = ptr.gpu | res_count;
@@ -339,7 +347,7 @@ panvk_per_arch(cmd_prepare_push_descs)(struct panvk_cmd_buffer *cmdbuf,
           !BITSET_TEST(desc_state->dirty_push_sets, i))
          continue;
 
-      struct panfrost_ptr ptr = panvk_cmd_alloc_dev_mem(
+      struct pan_ptr ptr = panvk_cmd_alloc_dev_mem(
          cmdbuf, desc, push_set->desc_count * PANVK_DESCRIPTOR_SIZE,
          PANVK_DESCRIPTOR_SIZE);
       if (!ptr.gpu)

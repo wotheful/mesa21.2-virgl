@@ -181,13 +181,6 @@ struct pipe_rasterizer_state
    unsigned clip_halfz:1;
 
    /**
-    * When true do not scale offset_units and use same rules for unorm and
-    * float depth buffers (D3D9). When false use GL/D3D1X behaviour.
-    * This depends on pipe_caps.polygon_offset_units_unscaled.
-    */
-   unsigned offset_units_unscaled:1;
-
-   /**
     * Depth values output from fragment shader may be outside 0..1.
     * These have to be clamped for use with UNORM buffers.
     * Vulkan can allow this with an extension,
@@ -397,6 +390,28 @@ struct pipe_stencil_ref
    uint8_t ref_value[2];
 };
 
+/**
+ * A view into a texture that can be bound to a color render target /
+ * depth stencil attachment point.
+ */
+struct pipe_surface
+{
+   struct pipe_reference reference;
+   enum pipe_format format:16;
+   /**
+    * Number of samples for the surface.  This will be 0 if rendering
+    * should use the resource's nr_samples, or another value if the resource
+    * is bound using FramebufferTexture2DMultisampleEXT.
+    */
+   unsigned nr_samples:16;
+
+   unsigned first_layer:16;
+   unsigned last_layer:16;
+   unsigned level;
+
+   struct pipe_resource *texture; /**< resource into which this is a view  */
+   struct pipe_context *context; /**< context this surface belongs to */
+};
 
 /**
  * Note that pipe_surfaces are "texture views for rendering"
@@ -414,9 +429,9 @@ struct pipe_framebuffer_state
    uint8_t nr_cbufs;
    /** used for multiview */
    uint8_t viewmask;
-   struct pipe_surface *cbufs[PIPE_MAX_COLOR_BUFS];
+   struct pipe_surface cbufs[PIPE_MAX_COLOR_BUFS];
 
-   struct pipe_surface *zsbuf;      /**< Z/stencil buffer */
+   struct pipe_surface zsbuf;      /**< Z/stencil buffer */
 
    struct pipe_resource *resolve;
 };
@@ -445,40 +460,6 @@ struct pipe_sampler_state
    float min_lod, max_lod;       /**< LOD clamp range, after bias */
    union pipe_color_union border_color;
    enum pipe_format border_color_format;      /**< only with PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_FREEDRENO, must be last */
-};
-
-union pipe_surface_desc {
-   struct {
-      unsigned level;
-      unsigned first_layer:16;
-      unsigned last_layer:16;
-   } tex;
-   struct {
-      unsigned first_element;
-      unsigned last_element;
-   } buf;
-};
-
-/**
- * A view into a texture that can be bound to a color render target /
- * depth stencil attachment point.
- */
-struct pipe_surface
-{
-   struct pipe_reference reference;
-   enum pipe_format format:16;
-   unsigned writable:1;          /**< writable shader resource */
-   struct pipe_resource *texture; /**< resource into which this is a view  */
-   struct pipe_context *context; /**< context this surface belongs to */
-
-   /**
-    * Number of samples for the surface.  This will be 0 if rendering
-    * should use the resource's nr_samples, or another value if the resource
-    * is bound using FramebufferTexture2DMultisampleEXT.
-    */
-   unsigned nr_samples:8;
-
-   union pipe_surface_desc u;
 };
 
 struct pipe_tex2d_from_buf {
@@ -1006,6 +987,10 @@ struct pipe_grid_info
    unsigned draw_count;
    unsigned indirect_draw_count_offset;
    struct pipe_resource *indirect_draw_count;
+
+   /* Resources which might be indirectly accessed through global load/store operations */
+   uint32_t num_globals;
+   struct pipe_resource **globals;
 };
 
 /**
@@ -1282,6 +1267,15 @@ struct pipe_memory_info
 struct pipe_memory_object
 {
    bool dedicated;
+};
+
+/**
+ * Structure that contains information about a vm allocation
+ */
+struct pipe_vm_allocation
+{
+   uint64_t start;
+   uint64_t size;
 };
 
 #ifdef __cplusplus

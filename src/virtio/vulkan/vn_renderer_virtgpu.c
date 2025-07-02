@@ -19,12 +19,13 @@
 #include <sys/sysmacros.h>
 #endif
 
+#include "virtio/virtio-gpu/venus_hw.h"
+
 #include "drm-uapi/virtgpu_drm.h"
 #include "util/os_file.h"
 #include "util/sparse_array.h"
 
 #include "vn_renderer_internal.h"
-#include "virtio/virtio-gpu/venus_hw.h"
 
 #ifndef VIRTGPU_PARAM_GUEST_VRAM
 /* All guest allocations happen via virtgpu dedicated heap. */
@@ -157,6 +158,8 @@ sim_syncobj_create(struct virtgpu *gpu, bool signaled)
       sim.syncobjs = _mesa_pointer_hash_table_create(NULL);
       if (!sim.syncobjs) {
          mtx_unlock(&sim.mutex);
+         mtx_destroy(&syncobj->mutex);
+         free(syncobj);
          return 0;
       }
 
@@ -171,6 +174,8 @@ sim_syncobj_create(struct virtgpu *gpu, bool signaled)
          _mesa_hash_table_destroy(sim.syncobjs, NULL);
          sim.syncobjs = NULL;
          mtx_unlock(&sim.mutex);
+         mtx_destroy(&syncobj->mutex);
+         free(syncobj);
          return 0;
       }
 
@@ -597,8 +602,7 @@ virtgpu_ioctl_get_caps(struct virtgpu *gpu,
 }
 
 static int
-virtgpu_ioctl_context_init(struct virtgpu *gpu,
-                           uint32_t capset_id)
+virtgpu_ioctl_context_init(struct virtgpu *gpu, uint32_t capset_id)
 {
    struct drm_virtgpu_context_set_param ctx_set_params[3] = {
       {
@@ -1238,7 +1242,8 @@ virtgpu_bo_create_from_device_memory(
    struct vn_renderer_bo **out_bo)
 {
    struct virtgpu *gpu = (struct virtgpu *)renderer;
-   const uint32_t blob_flags = virtgpu_bo_blob_flags(gpu, flags, external_handles);
+   const uint32_t blob_flags =
+      virtgpu_bo_blob_flags(gpu, flags, external_handles);
 
    uint32_t res_id;
    uint32_t gem_handle = virtgpu_ioctl_resource_create_blob(
@@ -1505,8 +1510,10 @@ static VkResult
 virtgpu_init_params(struct virtgpu *gpu)
 {
    const uint64_t required_params[] = {
-      VIRTGPU_PARAM_3D_FEATURES,   VIRTGPU_PARAM_CAPSET_QUERY_FIX,
-      VIRTGPU_PARAM_RESOURCE_BLOB, VIRTGPU_PARAM_CONTEXT_INIT,
+      VIRTGPU_PARAM_3D_FEATURES,
+      VIRTGPU_PARAM_CAPSET_QUERY_FIX,
+      VIRTGPU_PARAM_RESOURCE_BLOB,
+      VIRTGPU_PARAM_CONTEXT_INIT,
    };
    uint64_t val;
    for (uint32_t i = 0; i < ARRAY_SIZE(required_params); i++) {

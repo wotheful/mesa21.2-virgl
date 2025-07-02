@@ -162,8 +162,7 @@ radv_sdma_get_bpe(const struct radv_image *const image, VkImageAspectFlags aspec
 
    if (is_stencil_only) {
       return 1;
-   } else if (image->vk.format == VK_FORMAT_R32G32B32_UINT || image->vk.format == VK_FORMAT_R32G32B32_SINT ||
-              image->vk.format == VK_FORMAT_R32G32B32_SFLOAT) {
+   } else if (vk_format_is_96bit(image->vk.format)) {
       /* Adjust the bpp for 96-bits formats because SDMA expects a power of two. */
       return 4;
    } else {
@@ -174,8 +173,7 @@ radv_sdma_get_bpe(const struct radv_image *const image, VkImageAspectFlags aspec
 static uint32_t
 radv_sdma_get_texel_scale(const struct radv_image *const image)
 {
-   if (image->vk.format == VK_FORMAT_R32G32B32_UINT || image->vk.format == VK_FORMAT_R32G32B32_SINT ||
-       image->vk.format == VK_FORMAT_R32G32B32_SFLOAT) {
+   if (vk_format_is_96bit(image->vk.format)) {
       return 3;
    } else {
       return 1;
@@ -521,6 +519,7 @@ radv_sdma_emit_copy_linear_sub_window(const struct radv_device *device, struct r
 
    /* Adjust offset/extent for 96-bits formats because SDMA expects a power of two bpp. */
    const uint32_t texel_scale = src->texel_scale == 1 ? dst->texel_scale : src->texel_scale;
+   assert(texel_scale);
    src_off.x *= texel_scale;
    dst_off.x *= texel_scale;
    ext.width *= texel_scale;
@@ -729,6 +728,7 @@ radv_sdma_copy_buffer_image_unaligned(const struct radv_device *device, struct r
       .blk_h = img.blk_h,
       .pitch = info.aligned_row_pitch * img.blk_w,
       .slice_pitch = info.aligned_row_pitch * img.blk_w * info.extent_vertical_blocks * img.blk_h,
+      .texel_scale = buf->texel_scale,
    };
 
    VkExtent3D extent = base_extent;

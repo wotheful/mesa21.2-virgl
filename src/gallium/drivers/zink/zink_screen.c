@@ -30,7 +30,6 @@
 #include "zink_fence.h"
 #include "vk_format.h"
 #include "zink_format.h"
-#include "zink_framebuffer.h"
 #include "zink_program.h"
 #include "zink_public.h"
 #include "zink_query.h"
@@ -118,6 +117,7 @@ zink_debug_options[] = {
    { "quiet", ZINK_DEBUG_QUIET, "Suppress warnings" },
    { "ioopt", ZINK_DEBUG_IOOPT, "Optimize IO" },
    { "nopc", ZINK_DEBUG_NOPC, "No precompilation" },
+   { "msaaopt", ZINK_DEBUG_MSAAOPT, "Optimize out loads/stores of MSAA attachments" },
    DEBUG_NAMED_VALUE_END
 };
 
@@ -600,6 +600,7 @@ zink_init_shader_caps(struct zink_screen *screen)
          screen->info.feats12.shaderFloat16 ||
          (screen->info.have_KHR_shader_float16_int8 &&
           screen->info.shader_float16_int8_feats.shaderFloat16);
+      caps->glsl_16bit_load_dst = true;
 
       caps->int16 = screen->info.feats.features.shaderInt16;
 
@@ -723,9 +724,9 @@ zink_init_screen_caps(struct zink_screen *screen)
 #if defined(MVK_VERSION)
    caps->fbfetch = 0;
 #else
-   caps->fbfetch = 1;
+   caps->fbfetch = screen->info.have_KHR_dynamic_rendering_local_read;
 #endif
-   caps->fbfetch_coherent = screen->info.have_EXT_rasterization_order_attachment_access;
+   caps->fbfetch_coherent = caps->fbfetch && screen->info.have_EXT_rasterization_order_attachment_access;
 
    caps->memobj =
       screen->instance_info->have_KHR_external_memory_capabilities &&
@@ -741,6 +742,8 @@ zink_init_screen_caps(struct zink_screen *screen)
 
    caps->surface_reinterpret_blocks =
       screen->info.have_vulkan11 || screen->info.have_KHR_maintenance2;
+   caps->compressed_surface_reinterpret_blocks_layered = caps->surface_reinterpret_blocks &&
+                                                         screen->info.maint6_props.blockTexelViewCompatibleMultipleLayers;
 
    caps->validate_all_dirty_states = true;
    caps->allow_mapped_buffers_during_execution = true;
@@ -790,8 +793,6 @@ zink_init_screen_caps(struct zink_screen *screen)
    caps->texture_mirror_clamp_to_edge =
       screen->info.have_KHR_sampler_mirror_clamp_to_edge ||
       (screen->info.have_vulkan12 && screen->info.feats12.samplerMirrorClampToEdge);
-
-   caps->polygon_offset_units_unscaled = true;
 
    caps->polygon_offset_clamp = screen->info.feats.features.depthBiasClamp;
 
@@ -2222,7 +2223,12 @@ setup_renderdoc(struct zink_screen *screen)
    const char *capture_id = debug_get_option("ZINK_RENDERDOC", NULL);
    if (!capture_id)
       return;
-   void *renderdoc = dlopen("librenderdoc.so", RTLD_NOW | RTLD_NOLOAD);
+#if DETECT_OS_ANDROID
+   const char *libstr = "libVkLayer_GLES_RenderDoc.so";
+#else
+   const char *libstr = "librenderdoc.so";
+#endif
+   void *renderdoc = dlopen(libstr, RTLD_NOW | RTLD_NOLOAD);
    /* not loaded */
    if (!renderdoc)
       return;
@@ -2757,7 +2763,7 @@ static void
 init_driver_workarounds(struct zink_screen *screen)
 {
    /* enable implicit sync for all non-mesa drivers */
-   screen->driver_workarounds.implicit_sync = screen->info.driver_props.driverID != VK_DRIVER_ID_MESA_VENUS;
+   screen->driver_workarounds.implicit_sync = !zink_driver_is_venus(screen);
    switch (zink_driverid(screen)) {
    case VK_DRIVER_ID_MESA_RADV:
    case VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA:
@@ -2818,7 +2824,6 @@ init_driver_workarounds(struct zink_screen *screen)
                                                         ((zink_debug & ZINK_DEBUG_GPL) ||
                                                          screen->info.dynamic_state2_feats.extendedDynamicState2PatchControlPoints) &&
                                                         screen->info.have_EXT_extended_dynamic_state3 &&
-                                                        screen->info.have_KHR_dynamic_rendering &&
                                                         screen->info.have_EXT_non_seamless_cube_map &&
                                                         (!(zink_debug & ZINK_DEBUG_GPL) ||
                                                          screen->info.gpl_props.graphicsPipelineLibraryFastLinking ||
@@ -2843,10 +2848,9 @@ init_driver_workarounds(struct zink_screen *screen)
    }
 
    if (zink_driverid(screen) ==
-       VK_DRIVER_ID_IMAGINATION_PROPRIETARY) {
-      assert(screen->info.feats.features.geometryShader);
+       VK_DRIVER_ID_IMAGINATION_PROPRIETARY &&
+       screen->info.feats.features.geometryShader)
       screen->driver_workarounds.no_linesmooth = true;
-   }
 
    /* This is a workarround for the lack of
     * gl_PointSize + glPolygonMode(..., GL_LINE), in the imagination
@@ -2861,17 +2865,6 @@ init_driver_workarounds(struct zink_screen *screen)
       break;
    }
 
-   if (zink_driverid(screen) == VK_DRIVER_ID_AMD_OPEN_SOURCE || 
-       zink_driverid(screen) == VK_DRIVER_ID_AMD_PROPRIETARY || 
-       zink_driverid(screen) == VK_DRIVER_ID_NVIDIA_PROPRIETARY || 
-       zink_driverid(screen) == VK_DRIVER_ID_MESA_RADV)
-      screen->driver_workarounds.z24_unscaled_bias = 1<<23;
-   else
-      screen->driver_workarounds.z24_unscaled_bias = 1<<24;
-   if (zink_driverid(screen) == VK_DRIVER_ID_NVIDIA_PROPRIETARY)
-      screen->driver_workarounds.z16_unscaled_bias = 1<<15;
-   else
-      screen->driver_workarounds.z16_unscaled_bias = 1<<16;
    /* these drivers don't use VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT, so it can always be set */
    switch (zink_driverid(screen)) {
    case VK_DRIVER_ID_MESA_RADV:
@@ -2987,6 +2980,8 @@ init_driver_workarounds(struct zink_screen *screen)
    default:
       break;
    }
+   if (zink_driver_is_venus(screen))
+      screen->driver_workarounds.can_do_invalid_linear_modifier = true;
 
    /* these drivers have no difference between unoptimized and optimized shader compilation */
    switch (zink_driverid(screen)) {
@@ -3033,26 +3028,26 @@ init_driver_workarounds(struct zink_screen *screen)
       break;
    }
 
+   switch (zink_driverid(screen)) {
+   case VK_DRIVER_ID_MESA_LLVMPIPE:
+   case VK_DRIVER_ID_MESA_NVK:
+   case VK_DRIVER_ID_NVIDIA_PROPRIETARY:
+   case VK_DRIVER_ID_MESA_TURNIP:
+   case VK_DRIVER_ID_QUALCOMM_PROPRIETARY:
+      screen->driver_workarounds.general_layout = true;
+      break;
+   default:
+      screen->driver_workarounds.general_layout = screen->info.have_KHR_unified_image_layouts;
+      break;
+   }
+
    if (!screen->resizable_bar)
       screen->info.have_EXT_host_image_copy = false;
 }
 
 static void
-fixup_driver_props(struct zink_screen *screen)
+check_hic_shader_read(struct zink_screen *screen)
 {
-   VkPhysicalDeviceProperties2 props = {
-      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2
-   };
-   if (screen->info.have_EXT_host_image_copy) {
-      /* fill in layouts */
-      screen->info.hic_props.pNext = props.pNext;
-      props.pNext = &screen->info.hic_props;
-      screen->info.hic_props.pCopySrcLayouts = ralloc_array(screen, VkImageLayout, screen->info.hic_props.copySrcLayoutCount);
-      screen->info.hic_props.pCopyDstLayouts = ralloc_array(screen, VkImageLayout, screen->info.hic_props.copyDstLayoutCount);
-   }
-   if (props.pNext)
-      screen->vk.GetPhysicalDeviceProperties2(screen->pdev, &props);
-
    if (screen->info.have_EXT_host_image_copy) {
       for (unsigned i = 0; i < screen->info.hic_props.copyDstLayoutCount; i++) {
          if (screen->info.hic_props.pCopyDstLayouts[i] == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
@@ -3289,10 +3284,13 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
    if (++instance_refcount == 1) {
       instance_info.loader_version = zink_get_loader_version(screen);
       instance = zink_create_instance(screen, &instance_info);
-      if (!instance)
-         goto fail;
-   } else {
-      assert(instance);
+   }
+   if (!instance) {
+      /* We don't decrement instance_refcount here. This prevents us from trying
+       * to create another instance on subsequent calls.
+       */
+      simple_mtx_unlock(&instance_lock);
+      goto fail;
    }
    screen->instance = instance;
    screen->instance_info = &instance_info;
@@ -3343,6 +3341,11 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
    if (!zink_get_physical_device_info(screen)) {
       if (!screen->driver_name_is_inferred)
          debug_printf("ZINK: failed to detect features\n");
+      goto fail;
+   }
+
+   if (!screen->info.rb2_feats.nullDescriptor) {
+      mesa_loge("Zink requires the nullDescriptor feature of KHR/EXT robustness2.");
       goto fail;
    }
 
@@ -3408,10 +3411,11 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
       goto fail;
    }
 
-   if (zink_driverid(screen) == VK_DRIVER_ID_IMAGINATION_PROPRIETARY && !screen->info.feats.features.geometryShader) {
-      if (!screen->driver_name_is_inferred)
-         mesa_loge("zink: Imagination proprietary driver w/o geometryShader is unsupported");
-      goto fail;
+   /* Reject IMG blobs with DDK below 24.1@6554834 if not forced */
+   if (zink_driverid(screen) == VK_DRIVER_ID_IMAGINATION_PROPRIETARY && screen->info.props.driverVersion < 6554834) {
+      debug_printf("zink: Imagination proprietary driver is too old to be supported, expect failure\n");
+      if (screen->driver_name_is_inferred)
+         goto fail;
    }
 
    if (zink_debug & ZINK_DEBUG_MEM) {
@@ -3419,7 +3423,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
       screen->debug_mem_sizes = _mesa_hash_table_create(screen, _mesa_hash_string, _mesa_key_string_equal);
    }
 
-   fixup_driver_props(screen);
+   check_hic_shader_read(screen);
 
    init_driver_workarounds(screen);
 
@@ -3588,14 +3592,6 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
          if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB) {
             if (!screen->driver_name_is_inferred)
                mesa_loge("Cannot use db descriptor mode without EXT_non_seamless_cube_map");
-            goto fail;
-         }
-         can_db = false;
-      }
-      if (!screen->info.rb2_feats.nullDescriptor) {
-         if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB) {
-            if (!screen->driver_name_is_inferred)
-               mesa_loge("Cannot use db descriptor mode without robustness2.nullDescriptor");
             goto fail;
          }
          can_db = false;

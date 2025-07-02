@@ -78,12 +78,13 @@
       BFMT2(pipe##_SRGB, R8G8B8A8, writeback, 1)
 
 const struct pan_blendable_format
-   GENX(panfrost_blendable_formats)[PIPE_FORMAT_COUNT] = {
+   GENX(pan_blendable_formats)[PIPE_FORMAT_COUNT] = {
       BFMT_SRGB(L8, R8),
       BFMT_SRGB(L8A8, R8G8),
       BFMT_SRGB(R8, R8),
       BFMT_SRGB(R8G8, R8G8),
       BFMT_SRGB(R8G8B8, R8G8B8),
+      BFMT_SRGB(B8G8R8, R8G8B8),
 
       BFMT_SRGB(B8G8R8A8, R8G8B8A8),
       BFMT_SRGB(B8G8R8X8, R8G8B8A8),
@@ -154,7 +155,7 @@ const struct pan_blendable_format
    }
 #endif
 
-#if PAN_ARCH <= 7
+#if PAN_ARCH < 9
 #define FMTC(pipe, texfeat, interchange, swizzle, srgb)                        \
    [PIPE_FORMAT_##pipe] = {                                                    \
       .hw = MALI_PACK_FMT(texfeat, swizzle, srgb),                             \
@@ -174,7 +175,7 @@ const struct pan_blendable_format
 #endif
 
 /* clang-format off */
-const struct panfrost_format GENX(panfrost_pipe_format)[PIPE_FORMAT_COUNT] = {
+const struct pan_format GENX(pan_pipe_format)[PIPE_FORMAT_COUNT] = {
    FMT(NONE,                    CONSTANT,        0000, L, VTR_I),
 
 #if PAN_ARCH >= 7
@@ -193,6 +194,9 @@ const struct panfrost_format GENX(panfrost_pipe_format)[PIPE_FORMAT_COUNT] = {
 
    FMT_YUV(R10_G10B10_420_UNORM, Y10_UV10_420, YUVA, NO_SWAP, CENTER, _T___),
    FMT_YUV(R10_G10B10_422_UNORM, Y10_UV10_422, YUVA, NO_SWAP, CENTER_422, _T___),
+   /* special internal formats */
+   FMT_YUV(R8G8B8_420_UNORM_PACKED, Y8_UV8_420, YUVA, NO_SWAP, CENTER, _T___),
+   FMT_YUV(R10G10B10_420_UNORM_PACKED, Y10_UV10_420, YUVA, NO_SWAP, CENTER, _T___),
 #endif
 
    FMTC(ETC1_RGB8,               ETC2_RGB8,       RGBA8_UNORM, RGB1, L),
@@ -226,30 +230,30 @@ const struct panfrost_format GENX(panfrost_pipe_format)[PIPE_FORMAT_COUNT] = {
    /* If ASTC decode mode is set to RGBA8, the hardware format
     * will be overriden to RGBA8_UNORM later on.
     */
-   FMTC(ASTC_4x4,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_5x4,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_5x5,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_6x5,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_6x6,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_8x5,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_8x6,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_8x8,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_10x5,               ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_10x6,               ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_10x8,               ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_10x10,              ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_12x10,              ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_12x12,              ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_3x3x3,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_4x3x3,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_4x4x3,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_4x4x4,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_5x4x4,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_5x5x4,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_5x5x5,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_6x5x5,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_6x6x5,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_6x6x6,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_4x4,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x4,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x5,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x5,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x6,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x5,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x6,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x8,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x5,               ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x6,               ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x8,               ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x10,              ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_12x10,              ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_12x12,              ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_3x3x3,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_4x3x3,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_4x4x3,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_4x4x4,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x4x4,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x5x4,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x5x5,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x5x5,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x6x5,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x6x6,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
 
    /* By definition, sRGB formats are narrow */
    FMTC(ASTC_4x4_SRGB,           ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
@@ -276,6 +280,21 @@ const struct panfrost_format GENX(panfrost_pipe_format)[PIPE_FORMAT_COUNT] = {
    FMTC(ASTC_6x5x5_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
    FMTC(ASTC_6x6x5_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
    FMTC(ASTC_6x6x6_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
+
+   FMTC(ASTC_4x4_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x4_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x5_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x5_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x6_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x5_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x6_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x8_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x5_FLOAT,         ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x6_FLOAT,         ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x8_FLOAT,         ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x10_FLOAT,        ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_12x10_FLOAT,        ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_12x12_FLOAT,        ASTC_2D_HDR,     RGBA16F,     RGBA, L),
 
    FMT(R5G6B5_UNORM,            RGB565,          RGB1, L, VTR_I),
    FMT(B5G6R5_UNORM,            RGB565,          BGR1, L, VTR_I),
@@ -405,7 +424,8 @@ const struct panfrost_format GENX(panfrost_pipe_format)[PIPE_FORMAT_COUNT] = {
    FMT(R16_UNORM,               R16_UNORM,       R001, L, VTR_I),
    FMT(R8G8_UNORM,              RG8_UNORM,       RG01, L, VTR_I),
    FMT(R16G16_UNORM,            RG16_UNORM,      RG01, L, VTR_I),
-   FMT(R8G8B8_UNORM,            RGB8_UNORM,      RGB1, L, V____),
+   FMT(R8G8B8_UNORM,            RGB8_UNORM,      RGB1, L, VTR_I),
+   FMT(B8G8R8_UNORM,            RGB8_UNORM,      BGR1, L, VTR_I),
 
    /* 32-bit NORM is not texturable in v7 onwards. It's renderable
     * everywhere, but rendering without texturing is not useful.
@@ -468,8 +488,8 @@ const struct panfrost_format GENX(panfrost_pipe_format)[PIPE_FORMAT_COUNT] = {
    FMT(L8_SRGB,                 R8_UNORM,        RRR1, S, VTR_I),
    FMT(R8_SRGB,                 R8_UNORM,        R001, S, VTR_I),
    FMT(R8G8_SRGB,               RG8_UNORM,       RG01, S, VTR_I),
-   FMT(R8G8B8_SRGB,             RGB8_UNORM,      RGB1, S, V____),
-   FMT(B8G8R8_SRGB,             RGB8_UNORM,      BGR1, S, V____),
+   FMT(R8G8B8_SRGB,             RGB8_UNORM,      RGB1, S, VTR_I),
+   FMT(B8G8R8_SRGB,             RGB8_UNORM,      BGR1, S, VTR_I),
    FMT(R8G8B8A8_SRGB,           RGBA8_UNORM,     RGBA, S, VTR_I),
    FMT(A8B8G8R8_SRGB,           RGBA8_UNORM,     ABGR, S, VTR_I),
    FMT(X8B8G8R8_SRGB,           RGBA8_UNORM,     ABG1, S, VTR_I),
@@ -578,7 +598,7 @@ pan_raw_format_mask_midgard(enum pipe_format *formats)
 
    for (unsigned i = 0; i < 8; i++) {
       enum pipe_format fmt = formats[i];
-      unsigned wb_fmt = panfrost_blendable_formats_v6[fmt].writeback;
+      unsigned wb_fmt = pan_blendable_formats_v6[fmt].writeback;
 
       if (wb_fmt < MALI_COLOR_FORMAT_R8)
          out |= BITFIELD_BIT(i);

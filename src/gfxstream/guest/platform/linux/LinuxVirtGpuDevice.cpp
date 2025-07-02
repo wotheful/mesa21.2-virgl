@@ -7,9 +7,9 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <xf86drm.h>
-#include <sys/stat.h>
 
 #include <cerrno>
 #include <cstring>
@@ -18,6 +18,7 @@
 
 #include "LinuxVirtGpu.h"
 #include "drm-uapi/virtgpu_drm.h"
+#include "util/detect_os.h"
 #include "util/log.h"
 
 #ifdef MAJOR_IN_MKDEV
@@ -163,12 +164,21 @@ int32_t LinuxVirtGpuDevice::init(int32_t descriptor) {
 #endif
 
     if (descriptor < 0) {
+#if DETECT_OS_ANDROID
+        // Somebody needs to modify CF's SELinux rules to account for the syscalls used by
+        // drmGetDevices2().
+        mDeviceHandle = static_cast<int64_t>(drmOpenRender(128));
+        if (mDeviceHandle < 0) {
+            mesa_loge("Failed to open rendernode: %s", strerror(errno));
+            return -EINVAL;
+        }
+#else
         ret = openDevice();
         if (ret < 0) {
             mesa_logd("no virtio_gpu devices found");
             return ret;
         }
-
+#endif
     } else {
         mDeviceHandle = dup(descriptor);
         if (mDeviceHandle < 0) {
@@ -190,6 +200,13 @@ int32_t LinuxVirtGpuDevice::init(int32_t descriptor) {
 
         mCaps.params[i] = params[i].value;
     }
+
+#if !DETECT_OS_ANDROID
+    if ((mCaps.params[kParamSupportedCapsetIds] & (1 << VIRTGPU_DRM_CAPSET_GFXSTREAM_VULKAN)) ==
+        0) {
+        return -EINVAL;
+    }
+#endif
 
     auto capset = getCapset();
     get_caps.cap_set_id = static_cast<uint32_t>(capset);

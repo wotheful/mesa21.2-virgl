@@ -12,6 +12,7 @@
 #include "aco_util.h"
 
 #include "util/compiler.h"
+#include "util/shader_stats.h"
 
 #include "ac_binary.h"
 #include "ac_hw_stage.h"
@@ -460,12 +461,11 @@ static constexpr PhysReg scc{253};
  */
 class Operand final {
 public:
-   constexpr Operand()
-       : reg_(PhysReg{128}), isTemp_(false), isFixed_(true), isPrecolored_(false),
-         isConstant_(false), isKill_(false), isUndef_(true), isFirstKill_(false),
-         isLateKill_(false), isClobbered_(false), isCopyKill_(false), is16bit_(false),
-         is24bit_(false), signext(false), constSize(0)
-   {}
+   constexpr Operand() noexcept
+   {
+      isUndef_ = true;
+      setFixed(PhysReg{128});
+   }
 
    explicit Operand(Temp r) noexcept
    {
@@ -857,6 +857,12 @@ public:
 
    constexpr bool isFirstKillBeforeDef() const noexcept { return isFirstKill() && !isLateKill(); }
 
+   /* Indicates that the Operand is part of a vector consisting of multiple operands.
+    * Therefore, it must reside in a register aligned with the next Operand.
+    */
+   constexpr void setVectorAligned(bool flag) noexcept { isVectorAligned_ = flag; }
+   constexpr bool isVectorAligned() const noexcept { return isVectorAligned_; }
+
    constexpr bool operator==(Operand other) const noexcept
    {
       if (other.bytes() != bytes())
@@ -907,6 +913,7 @@ private:
          uint8_t isLateKill_ : 1;
          uint8_t isClobbered_ : 1;
          uint8_t isCopyKill_ : 1;
+         uint8_t isVectorAligned_ : 1;
          uint8_t is16bit_ : 1;
          uint8_t is24bit_ : 1;
          uint8_t signext : 1;
@@ -1889,6 +1896,7 @@ aco_opcode get_vcmp_swapped(aco_opcode op);
 aco_opcode get_vcmpx(aco_opcode op);
 bool is_cmpx(aco_opcode op);
 
+aco_opcode get_swapped_opcode(aco_opcode opcode, unsigned idx0, unsigned idx1);
 bool can_swap_operands(aco_ptr<Instruction>& instr, aco_opcode* new_op, unsigned idx0 = 0,
                        unsigned idx1 = 1);
 
@@ -1897,8 +1905,6 @@ uint32_t get_reduction_identity(ReduceOp op, unsigned idx);
 unsigned get_mimg_nsa_dwords(const Instruction* instr);
 
 unsigned get_vopd_opy_start(const Instruction* instr);
-
-unsigned get_operand_size(aco_ptr<Instruction>& instr, unsigned index);
 
 bool should_form_clause(const Instruction* a, const Instruction* b);
 
@@ -1911,7 +1917,7 @@ enum vmem_type : uint8_t {
 /* VMEM instructions of the same type return in-order. For GFX12+, this determines which counter
  * is used.
  */
-uint8_t get_vmem_type(enum amd_gfx_level gfx_level, Instruction* instr);
+uint8_t get_vmem_type(amd_gfx_level gfx_level, radeon_family family, Instruction* instr);
 
 /* For all of the counters, the maximum value means no wait.
  * Some of the counters are larger than their bit field,
@@ -2146,6 +2152,8 @@ public:
    /* Private segment buffers and scratch offsets. One entry per start/resume block */
    aco::small_vec<Temp, 2> private_segment_buffers;
    aco::small_vec<Temp, 2> scratch_offsets;
+   Temp static_scratch_rsrc;
+   Temp stack_ptr;
 
    uint16_t num_waves = 0;
    uint16_t min_waves = 0;
@@ -2157,7 +2165,7 @@ public:
    CompilationProgress progress;
 
    bool collect_statistics = false;
-   uint32_t statistics[aco_num_statistics];
+   amd_stats statistics;
 
    float_mode next_fp_mode;
    unsigned next_loop_depth = 0;
@@ -2329,7 +2337,8 @@ void _aco_err(Program* program, const char* file, unsigned line, const char* fmt
 
 #define aco_err(program, ...)      _aco_err(program, __FILE__, __LINE__, __VA_ARGS__)
 
-aco::small_vec<uint32_t, 2> get_ops_fixed_to_def(Instruction* instr);
+/* Returns the indices of operands to which definitions are tied to. */
+aco::small_vec<uint32_t, 2> get_tied_defs(Instruction* instr);
 
 /* utilities for dealing with register demand */
 RegisterDemand get_live_changes(Instruction* instr);
@@ -2347,6 +2356,9 @@ uint16_t get_vgpr_alloc(Program* program, uint16_t addressable_vgprs);
 RegisterDemand get_addr_regs_from_waves(Program* program, uint16_t waves);
 
 bool uses_scratch(Program* program);
+
+Temp load_scratch_resource(Program* program, Builder& bld, unsigned resume_idx,
+                           bool apply_scratch_offset);
 
 inline bool
 dominates_logical(const Block& parent, const Block& child)
@@ -2400,6 +2412,8 @@ struct aco_type {
       return 0;
    }
 };
+
+aco_type get_operand_type(aco_ptr<Instruction>& alu, unsigned index);
 
 struct aco_alu_opcode_info {
    uint8_t num_operands : 3;
