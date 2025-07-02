@@ -69,9 +69,9 @@ jobs:
             -Degl=enabled \
             -Dgbm=disabled \
             -Dopengl=true \
-            -Dgles2=true \
+            -Dgles2=enabled \
             -Dvulkan-drivers= \
-            -Dgallium-drivers=virgl,swrast
+            -Dgallium-drivers=virgl
           meson compile -C "build-android" -j 4
           meson install -C "build-android"
       - name: Upload libraries
