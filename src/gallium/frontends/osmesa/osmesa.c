@@ -174,8 +174,10 @@ get_st_manager(void)
 {
    static once_flag create_once_flag = ONCE_FLAG_INIT;
 
+   printf("45");
    call_once(&create_once_flag, create_st_manager);
 
+   printf("46");
    return global_fscreen;
 }
 
