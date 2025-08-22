@@ -961,7 +961,9 @@ st_api_create_context(struct pipe_frontend_screen *fscreen,
       printf("50\n");
       screen->drawable_ht = _mesa_hash_table_create(NULL,
                                                     NULL,
-      printf("51\n");                                           _mesa_key_pointer_equal);
+                                                 _mesa_key_pointer_equal);
+      
+      printf("51\n");
       fscreen->st_screen = screen;
    }
 
